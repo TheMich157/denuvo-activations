@@ -17,7 +17,7 @@ const SCREENSHOT_INSTRUCTIONS = [
   '',
   'You **must** post a screenshot showing:',
   '1. **Game folder** — Right‑click the game folder → **Properties** (visible in screenshot)',
-  '2. **WUB (Windows Update Blocker)** — Must show **"Windows updates paused"** or similar',
+  '2. **WUB (Windows Update Blocker)** — Must show updates disabled/paused **and the red shield with X icon** (WUB active state)',
   '',
   'Upload your screenshot in this channel. The bot will automatically verify it (game folder Properties + WUB). Supports multiple languages.',
 ].join('\n');

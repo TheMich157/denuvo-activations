@@ -21,23 +21,45 @@ export async function handleMessage(message) {
           .setColor(0x57f287)
           .setTitle('✅ Screenshot verified')
           .setDescription(
-            'Automatic verification passed. Detected: game folder **Properties** and WUB (**Windows updates paused** or equivalent).'
+            [
+              '**Progress: 2/2** ✓',
+              '✓ Game folder **Properties**',
+              '✓ WUB (updates paused + red shield/X icon)',
+              '',
+              'Ready for activator to claim.',
+            ].join('\n')
           )
-          .setFooter({ text: 'Ready for activator to claim' }),
+          .setFooter({ text: 'Verification complete' }),
       ],
     });
-  } else {
+  } else if (result.error) {
     await message.reply({
       embeds: [
         new EmbedBuilder()
           .setColor(0xfee75c)
           .setTitle('📸 Screenshot received')
           .setDescription(
-            result.error
-              ? 'Could not auto-verify (OCR failed). Activators: please verify the screenshot shows game folder **Properties** and WUB with **Windows updates paused** (or equivalent in your language) before claiming.'
-              : 'Could not detect required elements. Please ensure the screenshot clearly shows:\n1. Game folder **Properties** (right‑click → Properties)\n2. **WUB** with "Windows updates paused" or equivalent visible. All languages supported.'
+            'Could not auto-verify (OCR failed). Activators: please verify manually before claiming.'
           )
-          .setFooter({ text: result.error ? 'Manual verification required' : 'Auto-verify: missing required text' }),
+          .setFooter({ text: 'Manual verification required' }),
+      ],
+    });
+  } else {
+    const parts = ['**Progress:**'];
+    if (result.hasProperties) parts.push('✓ Game folder **Properties**');
+    else parts.push('○ Game folder **Properties** (right‑click folder → Properties)');
+    if (result.hasWub) parts.push('✓ WUB (updates paused + red shield/X)');
+    else parts.push('○ WUB with updates paused/disabled **and red shield with X icon**');
+    parts.push('');
+    parts.push('Add the missing element(s) and post an updated screenshot.');
+
+    await message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xfee75c)
+          .setTitle('📸 Screenshot received – partial')
+          .setDescription(parts.join('\n'))
+          .setFooter({ text: `${(result.hasProperties ? 1 : 0) + (result.hasWub ? 1 : 0)}/2 elements detected` }),
       ],
     });
   }
