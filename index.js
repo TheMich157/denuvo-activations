@@ -6,6 +6,8 @@ import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { config, validateConfig } from './src/config.js';
 import { initDb } from './src/db/index.js';
 import { handleMessage } from './src/handlers/messages.js';
+import { canUseCommand } from './src/utils/whitelist.js';
+import { MessageFlags } from 'discord.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -55,7 +57,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
   if (interaction.isChatInputCommand()) {
     const cmd = commands.get(interaction.commandName);
-    if (cmd?.execute) return cmd.execute(interaction);
+    if (!cmd?.execute) return;
+    const { allowed, reason } = canUseCommand(
+      interaction.user.id,
+      interaction.commandName,
+      interaction.member
+    );
+    if (!allowed) {
+      return interaction.reply({ content: reason || 'Command not allowed.', flags: MessageFlags.Ephemeral });
+    }
+    return cmd.execute(interaction);
   }
   return handle(interaction);
 });

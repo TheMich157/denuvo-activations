@@ -133,9 +133,21 @@ export async function initDb() {
   sqlDb.exec(schema);
   try {
     sqlDb.exec('ALTER TABLE activator_games ADD COLUMN stock_quantity INTEGER DEFAULT 5');
-  } catch {
-    /* column may already exist */
-  }
+  } catch { /* column may already exist */ }
+  try {
+    sqlDb.exec('ALTER TABLE requests ADD COLUMN screenshot_verified INTEGER DEFAULT 0');
+  } catch { /* column may already exist */ }
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS activation_cooldowns (
+        buyer_id TEXT NOT NULL,
+        game_app_id INTEGER NOT NULL,
+        cooldown_until TEXT NOT NULL,
+        PRIMARY KEY (buyer_id, game_app_id)
+      )
+    `);
+    sqlDb.exec('CREATE INDEX IF NOT EXISTS idx_cooldowns_buyer ON activation_cooldowns(buyer_id)');
+  } catch { /* table may already exist */ }
   return db;
 }
 
