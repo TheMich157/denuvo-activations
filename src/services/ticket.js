@@ -19,7 +19,7 @@ const SCREENSHOT_INSTRUCTIONS = [
   '1. **Game folder** — Right‑click the game folder → **Properties** (visible in screenshot)',
   '2. **WUB (Windows Update Blocker)** — Must show **"Windows updates paused"** or similar',
   '',
-  'Upload your screenshot in this channel. An activator will verify it manually before claiming.',
+  'Upload your screenshot in this channel. The bot will automatically verify it (game folder Properties + WUB). Supports multiple languages.',
 ].join('\n');
 
 export async function createTicketForGame(interaction, appId, options = {}) {
