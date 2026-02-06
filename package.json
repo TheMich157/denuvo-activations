@@ -1,0 +1,16 @@
+{
+  "name": "denuvo-activations-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "test:startup": "node scripts/startup-test.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.49.0",
+    "sql.js": "^1.13.0",
+    "tesseract.js": "^5.1.0"
+  }
+}
