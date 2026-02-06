@@ -6,11 +6,12 @@ import {
   PermissionFlagsBits,
   EmbedBuilder,
 } from 'discord.js';
-import { createRequest, setTicketChannel } from './requests.js';
+import { createRequest, setTicketChannel, checkCooldown } from './requests.js';
 import { getActivatorsForGame } from './activators.js';
 import { getGameByAppId } from '../utils/games.js';
 import { config } from '../config.js';
 import { isValidAppId } from '../utils/validate.js';
+import { isActivator } from '../utils/activator.js';
 
 const VALIDITY_MINUTES = 30;
 
@@ -30,6 +31,15 @@ export async function createTicketForGame(interaction, appId, options = {}) {
   const activators = getActivatorsForGame(appId);
   if (activators.length === 0) {
     return { ok: false, error: `**${game.name}** is out of stock. Try again later.` };
+  }
+
+  const cooldownUntil = isActivator(interaction.member) ? null : checkCooldown(interaction.user.id, game.appId);
+  if (cooldownUntil) {
+    const mins = Math.ceil((cooldownUntil - Date.now()) / 60000);
+    return {
+      ok: false,
+      error: `You can request **${game.name}** again in **${mins} minutes** (once per 24 hours).`,
+    };
   }
 
   const requestId = createRequest(interaction.user.id, game.appId, game.name);
@@ -88,8 +98,8 @@ export async function createTicketForGame(interaction, appId, options = {}) {
         inline: false,
       },
       {
-        name: '📸 Required — post a screenshot showing both:',
-        value: 'Upload your screenshot in this channel. The bot will verify automatically.',
+        name: '📸 Required — post a screenshot showing both (within 5 minutes):',
+        value: 'Upload your screenshot in this channel. The bot will verify automatically. **Ticket closes if not verified in 5 minutes** (24h cooldown applies).',
         inline: false,
       },
       {

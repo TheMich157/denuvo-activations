@@ -6,6 +6,33 @@ import { isValidDiscordId, isValidRequestId, isValidAppId } from '../utils/valid
 import crypto from 'crypto';
 
 const VALID_FAIL_REASONS = ['failed', 'cancelled', 'invalid_token'];
+const COOLDOWN_HOURS = 24;
+
+export function checkCooldown(buyerId, gameAppId) {
+  if (!isValidDiscordId(buyerId) || !isValidAppId(gameAppId)) return null;
+  const row = db.prepare(
+    'SELECT cooldown_until FROM activation_cooldowns WHERE buyer_id = ? AND game_app_id = ?'
+  ).get(buyerId, gameAppId);
+  if (!row) return null;
+  const until = new Date(row.cooldown_until).getTime();
+  if (Date.now() >= until) return null;
+  return until;
+}
+
+export function setCooldown(buyerId, gameAppId, hours = COOLDOWN_HOURS) {
+  if (!isValidDiscordId(buyerId) || !isValidAppId(gameAppId)) return;
+  const until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  db.prepare(
+    'INSERT OR REPLACE INTO activation_cooldowns (buyer_id, game_app_id, cooldown_until) VALUES (?, ?, ?)'
+  ).run(buyerId, gameAppId, until);
+  scheduleSave();
+}
+
+export function markScreenshotVerified(requestId) {
+  if (!isValidRequestId(requestId)) return;
+  db.prepare('UPDATE requests SET screenshot_verified = 1 WHERE id = ?').run(requestId);
+  scheduleSave();
+}
 
 export function createRequest(buyerId, gameAppId, gameName) {
   if (!isValidDiscordId(buyerId)) throw new Error('Invalid buyer ID');
@@ -59,6 +86,7 @@ export function completeRequest(requestId, authCode) {
   const steamId = getCredentials(req.issuer_id, req.game_app_id)?.username ?? `manual_${req.issuer_id}_${req.game_app_id}`;
   incrementDailyActivation(steamId);
   decrementActivatorStock(req.issuer_id, req.game_app_id);
+  setCooldown(req.buyer_id, req.game_app_id, COOLDOWN_HOURS);
   scheduleSave();
   return true;
 }
@@ -97,4 +125,19 @@ export function setTicketChannel(requestId, channelId) {
   if (!isValidRequestId(requestId)) return;
   db.prepare('UPDATE requests SET ticket_channel_id = ? WHERE id = ?').run(String(channelId), requestId);
   scheduleSave();
+}
+
+/**
+ * Returns pending requests with unverified screenshots older than maxAgeMinutes.
+ * Used by the 5-min auto-close job.
+ */
+export function getUnverifiedPendingOlderThan(maxAgeMinutes) {
+  const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000).toISOString();
+  return db.prepare(`
+    SELECT id, buyer_id, game_app_id, ticket_channel_id, game_name
+    FROM requests
+    WHERE status = 'pending'
+      AND (screenshot_verified IS NULL OR screenshot_verified = 0)
+      AND created_at < ?
+  `).all(cutoff);
 }

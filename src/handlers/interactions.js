@@ -10,7 +10,7 @@ import { debug } from '../utils/debug.js';
 import { isActivator } from '../utils/activator.js';
 
 const log = debug('interaction');
-import { assignIssuer, getRequest, getRequestByChannel, cancelRequest } from '../services/requests.js';
+import { assignIssuer, getRequest, getRequestByChannel, cancelRequest, markScreenshotVerified } from '../services/requests.js';
 import { setState, clearState } from '../services/screenshotVerify/state.js';
 import { handleSelect as panelHandleSelect, handleRefresh as panelHandleRefresh } from '../commands/panelHandler.js';
 import { handleSelect as addHandleSelect, handleModal as addHandleModal } from '../commands/add.js';
@@ -94,6 +94,7 @@ async function handleManualVerifyScreenshot(interaction) {
     });
     return true;
   }
+  markScreenshotVerified(req.id);
   setState(interaction.channelId, {
     hasProperties: true,
     hasWub: true,

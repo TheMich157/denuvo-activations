@@ -7,6 +7,7 @@ import { config, validateConfig } from './src/config.js';
 import { initDb } from './src/db/index.js';
 import { handleMessage } from './src/handlers/messages.js';
 import { canUseCommand } from './src/utils/whitelist.js';
+import { startTicketAutoClose } from './src/services/ticketAutoClose.js';
 import { MessageFlags } from 'discord.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -48,6 +49,7 @@ client.once(Events.ClientReady, async (c) => {
   } catch (err) {
     console.error('Failed to register commands:', err);
   }
+  startTicketAutoClose(client);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {

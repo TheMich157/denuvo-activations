@@ -4,7 +4,7 @@ import {
   ButtonStyle,
   EmbedBuilder,
 } from 'discord.js';
-import { getRequestByChannel } from '../services/requests.js';
+import { getRequestByChannel, markScreenshotVerified } from '../services/requests.js';
 import { verifyScreenshot } from '../services/screenshotVerify/index.js';
 import {
   mergeDetection,
@@ -76,6 +76,7 @@ export async function handleMessage(message) {
   }
 
   if (verified) {
+    markScreenshotVerified(req.id);
     clearState(message.channelId);
     const embed = new EmbedBuilder()
       .setColor(0x57f287)
