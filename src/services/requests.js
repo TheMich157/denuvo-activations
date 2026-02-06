@@ -129,15 +129,14 @@ export function setTicketChannel(requestId, channelId) {
 
 /**
  * Returns pending requests with unverified screenshots older than maxAgeMinutes.
- * Used by the 5-min auto-close job.
+ * Uses SQLite datetime for correct comparison with created_at.
  */
 export function getUnverifiedPendingOlderThan(maxAgeMinutes) {
-  const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000).toISOString();
   return db.prepare(`
     SELECT id, buyer_id, game_app_id, ticket_channel_id, game_name
     FROM requests
     WHERE status = 'pending'
       AND (screenshot_verified IS NULL OR screenshot_verified = 0)
-      AND created_at < ?
-  `).all(cutoff);
+      AND datetime(created_at) < datetime('now', '-' || ? || ' minutes')
+  `).all(maxAgeMinutes);
 }

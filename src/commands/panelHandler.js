@@ -1,18 +1,9 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
+import { MessageFlags } from 'discord.js';
 import { createTicketForGame } from '../services/ticket.js';
-import { buildPanelComponents } from './ticketpanel.js';
+import { buildPanelMessagePayload } from './ticketpanel.js';
 import { getPanel } from '../services/panel.js';
 import { isValidAppId } from '../utils/validate.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
-
-function buildRefreshRow() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('ticket_panel_refresh')
-      .setLabel('🔄 Refresh Stock')
-      .setStyle(ButtonStyle.Secondary)
-  );
-}
 
 export async function handleSelect(interaction) {
   if (!interaction.isStringSelectMenu() || !interaction.customId.startsWith('ticket_panel:')) return false;
@@ -52,7 +43,7 @@ export async function handleRefresh(interaction) {
     return true;
   }
 
-  const components = [...buildPanelComponents(), buildRefreshRow()];
-  await interaction.update({ components });
+  const payload = buildPanelMessagePayload();
+  await interaction.update({ components: payload.components });
   return true;
 }

@@ -35,12 +35,15 @@ async function runCheck() {
     cancelRequest(req.id);
     setCooldown(req.buyer_id, req.game_app_id, COOLDOWN_HOURS);
     clearState(req.ticket_channel_id);
-    const msg = `⏱️ Your **${req.game_name}** ticket was closed: screenshot was not verified within ${VERIFY_DEADLINE_MINUTES} minutes. You can request this game again in 24 hours.`;
+    const msg = `⏱️ <@${req.buyer_id}> Your **${req.game_name}** ticket was closed: screenshot was not verified within ${VERIFY_DEADLINE_MINUTES} minutes. You can request this game again in 24 hours.`;
+    const channel = await clientRef.channels.fetch(req.ticket_channel_id).catch(() => null);
+    if (channel?.send) {
+      await channel.send({ content: msg, allowedMentions: { users: [req.buyer_id] } }).catch(() => null);
+    }
     try {
       const user = await clientRef.users.fetch(req.buyer_id).catch(() => null);
-      if (user) await user.send(msg).catch(() => null);
+      if (user) await user.send(msg.replace(`<@${req.buyer_id}> `, '')).catch(() => null);
     } catch { /* ignore */ }
-    const channel = await clientRef.channels.fetch(req.ticket_channel_id).catch(() => null);
     if (channel?.deletable) {
       await channel.delete().catch(() => null);
     }

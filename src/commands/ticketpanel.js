@@ -51,36 +51,14 @@ export function buildPanelComponents() {
   return rows;
 }
 
-export async function execute(interaction) {
-  const guildErr = requireGuild(interaction);
-  if (guildErr) return interaction.reply({ content: guildErr, flags: MessageFlags.Ephemeral });
-  if (!isActivator(interaction.member)) {
-    return interaction.reply({ content: 'Only activators can post the ticket panel.', flags: MessageFlags.Ephemeral });
-  }
-  if (!checkRateLimit(interaction.user.id, 'ticketpanel', 3, 60000)) {
-    const sec = getRemainingCooldown(interaction.user.id, 'ticketpanel');
-    return interaction.reply({ content: `Rate limited. Try again in ${sec}s.`, flags: MessageFlags.Ephemeral });
-  }
-  const channel = interaction.channel;
-  if (!channel?.isTextBased() || channel.isDMBased()) {
-    return interaction.reply({ content: 'This command must be run in a server text channel.', flags: MessageFlags.Ephemeral });
-  }
-
-  const existing = getPanel();
-  if (existing) {
-    try {
-      const oldChannel = await interaction.client.channels.fetch(existing.channel_id).catch(() => null);
-      if (oldChannel?.isTextBased()) {
-        const msg = await oldChannel.messages.fetch(existing.message_id).catch(() => null);
-        if (msg) await msg.delete();
-      }
-    } catch {
-      /* ignore */
-    }
-    clearPanel();
-  }
-
+export function buildPanelMessagePayload() {
   const components = buildPanelComponents();
+  const refreshRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('ticket_panel_refresh')
+      .setLabel('🔄 Refresh Stock')
+      .setStyle(ButtonStyle.Secondary)
+  );
   const embed = new EmbedBuilder()
     .setColor(0x1b2838)
     .setTitle('🎮 Game Activation Center')
@@ -118,18 +96,40 @@ export async function execute(interaction) {
       text: '🔄 Refresh Stock updates availability • Select a game below to start',
     })
     .setTimestamp();
+  return { embeds: [embed], components: [...components, refreshRow] };
+}
 
-  const refreshRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('ticket_panel_refresh')
-      .setLabel('🔄 Refresh Stock')
-      .setStyle(ButtonStyle.Secondary)
-  );
+export async function execute(interaction) {
+  const guildErr = requireGuild(interaction);
+  if (guildErr) return interaction.reply({ content: guildErr, flags: MessageFlags.Ephemeral });
+  if (!isActivator(interaction.member)) {
+    return interaction.reply({ content: 'Only activators can post the ticket panel.', flags: MessageFlags.Ephemeral });
+  }
+  if (!checkRateLimit(interaction.user.id, 'ticketpanel', 3, 60000)) {
+    const sec = getRemainingCooldown(interaction.user.id, 'ticketpanel');
+    return interaction.reply({ content: `Rate limited. Try again in ${sec}s.`, flags: MessageFlags.Ephemeral });
+  }
+  const channel = interaction.channel;
+  if (!channel?.isTextBased() || channel.isDMBased()) {
+    return interaction.reply({ content: 'This command must be run in a server text channel.', flags: MessageFlags.Ephemeral });
+  }
 
-  const msg = await channel.send({
-    embeds: [embed],
-    components: [...components, refreshRow],
-  });
+  const existing = getPanel();
+  if (existing) {
+    try {
+      const oldChannel = await interaction.client.channels.fetch(existing.channel_id).catch(() => null);
+      if (oldChannel?.isTextBased()) {
+        const msg = await oldChannel.messages.fetch(existing.message_id).catch(() => null);
+        if (msg) await msg.delete();
+      }
+    } catch {
+      /* ignore */
+    }
+    clearPanel();
+  }
+
+  const payload = buildPanelMessagePayload();
+  const msg = await channel.send(payload);
   setPanel(interaction.guildId, channel.id, msg.id);
 
   await interaction.reply({ content: 'Ticket panel posted. Only one panel exists globally; the previous one was replaced.', flags: MessageFlags.Ephemeral });
