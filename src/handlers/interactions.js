@@ -7,9 +7,11 @@ import {
   PermissionFlagsBits,
 } from 'discord.js';
 import { debug } from '../utils/debug.js';
+import { isActivator } from '../utils/activator.js';
 
 const log = debug('interaction');
 import { assignIssuer, getRequest, getRequestByChannel, cancelRequest } from '../services/requests.js';
+import { setState, clearState } from '../services/screenshotVerify/state.js';
 import { handleSelect as panelHandleSelect, handleRefresh as panelHandleRefresh } from '../commands/panelHandler.js';
 import { handleSelect as addHandleSelect, handleModal as addHandleModal } from '../commands/add.js';
 import { handleButton as doneHandleButton, handleModal as doneHandleModal, handleCopyButton as doneHandleCopyButton } from '../commands/done.js';
@@ -76,6 +78,44 @@ async function handleClaimRequest(interaction) {
   return true;
 }
 
+async function handleManualVerifyScreenshot(interaction) {
+  if (!interaction.isButton() || !interaction.customId.startsWith('manual_verify_screenshot:')) return false;
+  const req = getRequestByChannel(interaction.channelId);
+  if (!req) {
+    await interaction.reply({ content: 'No ticket found for this channel.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  const isIssuer = req.issuer_id && interaction.user.id === req.issuer_id;
+  const activator = isActivator(interaction.member);
+  if (!isIssuer && !activator) {
+    await interaction.reply({
+      content: 'Only the assigned activator or an activator can approve manually.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+  setState(interaction.channelId, {
+    hasProperties: true,
+    hasWub: true,
+    failCount: 0,
+    manualVerified: true,
+  });
+  const approvedEmbed = new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle('✅ Screenshot manually approved')
+    .setDescription(
+      `Approved by <@${interaction.user.id}>. Ready for activator to claim.`
+    )
+    .setFooter({ text: 'Manual verification' })
+    .setTimestamp();
+  await interaction.update({
+    content: null,
+    embeds: [approvedEmbed],
+    components: [],
+  });
+  return true;
+}
+
 async function handleCloseTicket(interaction) {
   if (!interaction.isButton() || interaction.customId !== 'close_ticket') return false;
   const req = getRequestByChannel(interaction.channelId);
@@ -90,6 +130,7 @@ async function handleCloseTicket(interaction) {
     return true;
   }
   cancelRequest(req.id);
+  clearState(interaction.channelId);
   const channel = interaction.channel;
   if (channel?.deletable) {
     await interaction.reply({ content: 'Closing ticket...', flags: MessageFlags.Ephemeral });
@@ -103,6 +144,7 @@ async function handleCloseTicket(interaction) {
 export async function handle(interaction) {
   log(interaction.constructor.name, interaction.customId ?? interaction.commandName ?? '—');
   const handlers = [
+    handleManualVerifyScreenshot,
     handleCloseTicket,
     handleClaimRequest,
     doneHandleCopyButton,
