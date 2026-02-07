@@ -307,6 +307,103 @@ export async function initDb() {
       )
     `);
   } catch {}
+  // User tiers (Ko-fi supporter tiers)
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS user_tiers (
+        user_id TEXT PRIMARY KEY,
+        tier TEXT NOT NULL DEFAULT 'none' CHECK(tier IN ('none', 'low', 'mid', 'high')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
+  // Warnings
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS warnings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        issued_by TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
+  // Giveaways
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS giveaways (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_name TEXT NOT NULL,
+        game_app_id INTEGER,
+        created_by TEXT NOT NULL,
+        ends_at TEXT NOT NULL,
+        max_winners INTEGER DEFAULT 1,
+        message_id TEXT,
+        channel_id TEXT,
+        winners TEXT,
+        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'ended')),
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS giveaway_entries (
+        giveaway_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY(giveaway_id, user_id)
+      )
+    `);
+  } catch {}
+  // Game request voting
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS game_votes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_name TEXT NOT NULL,
+        suggested_by TEXT NOT NULL,
+        votes INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'open' CHECK(status IN ('open', 'added', 'rejected')),
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS game_vote_users (
+        vote_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        PRIMARY KEY(vote_id, user_id)
+      )
+    `);
+  } catch {}
+  // Ticket feedback
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS ticket_feedback (
+        request_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+        comment TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
+  // Activator schedules
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS activator_schedules (
+        activator_id TEXT PRIMARY KEY,
+        timezone TEXT DEFAULT 'UTC',
+        available_start INTEGER DEFAULT 0,
+        available_end INTEGER DEFAULT 24,
+        days TEXT DEFAULT '0,1,2,3,4,5,6',
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
   return db;
 }
 

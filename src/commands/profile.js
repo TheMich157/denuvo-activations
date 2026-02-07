@@ -12,6 +12,8 @@ import { isAway } from '../services/activatorStatus.js';
 import { getActivatorRating, formatStars } from '../services/ratings.js';
 import { getStreakInfo } from '../services/streaks.js';
 import { config } from '../config.js';
+import { getUserTierInfo, TIERS } from '../services/tiers.js';
+import { getWarningCount } from '../services/warnings.js';
 
 const HISTORY_LIMIT = 5;
 
@@ -66,12 +68,16 @@ export async function execute(interaction) {
     ? ` • Viewed by ${interaction.user.displayName || interaction.user.username}`
     : '';
 
-  // —— Account type ——
+  // —— Account type + tier ——
   const accountLabel = getAccountLabel(targetMember, userId);
   const awayTag = away ? ' • 🌙 Away' : '';
+  const tierInfo = getUserTierInfo(userId);
+  const tierTag = tierInfo.tier !== 'none' ? `\n${TIERS[tierInfo.tier].emoji} **${TIERS[tierInfo.tier].label}**` : '';
+  const warns = getWarningCount(userId);
+  const warnTag = warns > 0 ? `\n⚠️ Warnings: **${warns}**/3` : '';
   embed.addFields({
     name: '👤 Account',
-    value: `${accountLabel}${awayTag}`,
+    value: `${accountLabel}${awayTag}${tierTag}${warnTag}`,
     inline: true,
   });
 

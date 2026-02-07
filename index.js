@@ -15,6 +15,7 @@ import { syncPanelMessage, setPanelClient } from './src/services/panel.js';
 import { buildPanelMessagePayload } from './src/commands/ticketpanel.js';
 import { startBackupService } from './src/services/backup.js';
 import { startLeaderboardScheduler } from './src/services/leaderboardScheduler.js';
+import { startGiveawayScheduler } from './src/services/giveawayScheduler.js';
 import { MessageFlags } from 'discord.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,7 @@ for (const file of commandFiles) {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent,
@@ -69,6 +71,7 @@ client.once(Events.ClientReady, async (c) => {
   startDailyDigest(client);
   startBackupService();
   startLeaderboardScheduler(client);
+  startGiveawayScheduler(client);
   setPanelClient(client, buildPanelMessagePayload);
   syncPanelMessage(client, buildPanelMessagePayload()).catch((err) =>
     console.error('[Panel] Startup sync failed:', err?.message)
@@ -97,6 +100,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.on(Events.MessageCreate, handleMessage);
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  if (member.user.bot) return;
+  // Auto-assign unverified role on join
+  if (config.unverifiedRoleId) {
+    try {
+      await member.roles.add(config.unverifiedRoleId);
+      console.log(`[Verify] Assigned unverified role to ${member.user.tag}`);
+    } catch (err) {
+      console.error(`[Verify] Failed to assign unverified role to ${member.user.tag}:`, err.message);
+    }
+  }
+  // Send a welcome hint to the verify channel
+  if (config.verifyChannelId) {
+    try {
+      const channel = await member.client.channels.fetch(config.verifyChannelId).catch(() => null);
+      if (channel) {
+        const embed = new (await import('discord.js')).EmbedBuilder()
+          .setColor(0x5865F2)
+          .setDescription(`👋 Welcome <@${member.id}>! Ping me here to start your verification quiz and unlock the server.`)
+          .setFooter({ text: 'Type @DenuBrew or mention the bot to begin' });
+        const msg = await channel.send({ content: `<@${member.id}>`, embeds: [embed] });
+        setTimeout(() => msg.delete().catch(() => {}), 60000);
+      }
+    } catch {}
+  }
+});
 
 client.login(config.token).catch((err) => {
   console.error('Login failed:', err);

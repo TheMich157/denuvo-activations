@@ -12,4 +12,11 @@ export const ACTIVATOR_COMMANDS = [
   'away',
   'waitlist',
   'preorder',
+  'tier',
+  'warn',
+  'giveaway',
+  'bulkcode',
+  'audit',
+  'info',
+  'schedule',
 ];

@@ -57,6 +57,34 @@ export async function completeAndNotifyTicket(req, authCode, client) {
   triggerPanelSync().catch(() => {});
   sendStatusDM(client, req.buyer_id, 'completed', { gameName, issuerName: req.issuer_id }).catch(() => {});
 
+  // Send feedback survey DM (after a short delay)
+  setTimeout(async () => {
+    try {
+      const user = await client.users.fetch(req.buyer_id).catch(() => null);
+      if (user) {
+        const feedbackRow = new ActionRowBuilder().addComponents(
+          ...[1, 2, 3, 4, 5].map((n) =>
+            new ButtonBuilder()
+              .setCustomId(`feedback:${req.id}:${n}`)
+              .setLabel('⭐'.repeat(n))
+              .setStyle(n >= 4 ? ButtonStyle.Success : n >= 2 ? ButtonStyle.Primary : ButtonStyle.Secondary)
+          )
+        );
+        await user.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x3498db)
+              .setTitle('📝 How was your experience?')
+              .setDescription(`Rate your activation experience for **${gameName}**.\nYour feedback helps us improve!`)
+              .setFooter({ text: `Ticket #${req.id.slice(0, 8).toUpperCase()}` })
+              .setTimestamp(),
+          ],
+          components: [feedbackRow],
+        }).catch(() => {});
+      }
+    } catch {}
+  }, 60000); // Send 1 minute after completion
+
   const ticketChannel = req.ticket_channel_id
     ? await client.channels.fetch(req.ticket_channel_id).catch(() => null)
     : null;

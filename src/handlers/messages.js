@@ -30,6 +30,7 @@ import {
   logPreorderVerify,
   logPreorderStatus,
 } from '../services/activationLog.js';
+import { startVerificationInChannel } from '../services/verification.js';
 
 const IMAGE_EXT = /\.(png|jpg|jpeg|webp|gif)(\?.*)?$/i;
 const FAIL_THRESHOLD = 5;
@@ -505,6 +506,18 @@ async function handleManifestRequest(message) {
 
 export async function handleMessage(message) {
   if (message.author.bot || !message.guild) return;
+
+  // Handle verification channel — user pings the bot to start quiz
+  if (config.verifyChannelId && message.channelId === config.verifyChannelId) {
+    if (message.mentions.has(message.client.user)) {
+      try {
+        await startVerificationInChannel(message);
+      } catch (err) {
+        console.error('[Verify] Error starting verification:', err.message);
+      }
+    }
+    return; // Don't process other handlers for messages in the verify channel
+  }
 
   // Handle tip proof verification in the designated channel
   if (await handleTipVerification(message)) return;

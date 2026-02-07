@@ -17,6 +17,9 @@ export const config = {
   tipVerifyChannelId: process.env.TIP_VERIFY_CHANNEL_ID || null,
   kofiUrl: process.env.KOFI_URL || 'https://ko-fi.com/denubrew',
   minDonation: parseInt(process.env.MIN_DONATION ?? '5', 10),
+  verifyChannelId: process.env.VERIFY_CHANNEL_ID || null,
+  unverifiedRoleId: process.env.UNVERIFIED_ROLE_ID || null,
+  verifiedRoleId: process.env.VERIFIED_ROLE_ID || null,
 };
 
 const REQUIRED = ['token', 'clientId', 'activatorRoleId', 'ticketCategoryId'];

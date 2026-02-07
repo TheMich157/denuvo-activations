@@ -34,6 +34,11 @@ import {
   logPreorderReject,
   logPreorderStatus,
 } from '../services/activationLog.js';
+import { getGiveaway, hasEntered, enterGiveaway, getEntryCount } from '../services/giveaway.js';
+import { submitFeedback, hasFeedback } from '../services/feedback.js';
+import { handleBulkCodeModal } from '../commands/bulkcode.js';
+import { getUserTierInfo, TIERS, getDiscountedPrice } from '../services/tiers.js';
+import { handleVerifyAnswer, handleVerifyRetry } from '../services/verification.js';
 
 function buildIssuerActionRow(requestId, hasAutomated = false) {
   const components = [
@@ -419,6 +424,13 @@ async function handlePreorderClaim(interaction) {
   // Log the claim
   logPreorderClaim({ preorderId, gameName: preorder.game_name, userId: interaction.user.id, spotsInfo: spots }).catch(() => {});
 
+  // Tier-based discount on preorder price
+  const tierInfo = getUserTierInfo(interaction.user.id);
+  const discountedPrice = getDiscountedPrice(preorder.price, interaction.user.id);
+  const priceDisplay = discountedPrice < preorder.price
+    ? `~~$${preorder.price.toFixed(2)}~~ **$${discountedPrice.toFixed(2)}** (${tierInfo.emoji} ${Math.round(TIERS[tierInfo.tier].preorderDiscount * 100)}% tier discount!)`
+    : `**$${preorder.price.toFixed(2)}**`;
+
   const embed = new EmbedBuilder()
     .setColor(0xe91e63)
     .setTitle('🎟️ Preorder Spot Claimed!')
@@ -429,7 +441,7 @@ async function handlePreorderClaim(interaction) {
         `🎟️ **Spots:** ${spotsText}`,
         '',
         '**Next steps:**',
-        `1. Donate at least **$${preorder.price.toFixed(2)}** on [Ko-fi](${config.kofiUrl})`,
+        `1. Donate at least ${priceDisplay} on [Ko-fi](${config.kofiUrl})`,
         `2. Post your tip proof screenshot in <#${config.tipVerifyChannelId || 'tip-verify'}>`,
         `3. Include **"preorder ${preorderId}"** or **"#${preorderId}"** in your message`,
         '4. The bot will auto-verify your payment!',
@@ -485,9 +497,71 @@ async function handlePreorderClaim(interaction) {
   return true;
 }
 
+async function handleGiveawayEnter(interaction) {
+  if (!interaction.isButton() || !interaction.customId.startsWith('giveaway_enter:')) return false;
+  const giveawayId = parseInt(interaction.customId.split(':')[1], 10);
+  const giveaway = getGiveaway(giveawayId);
+  if (!giveaway) {
+    await interaction.reply({ content: 'Giveaway not found.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (giveaway.status === 'ended') {
+    await interaction.reply({ content: 'This giveaway has already ended.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (new Date(giveaway.ends_at) < new Date()) {
+    await interaction.reply({ content: 'This giveaway has expired.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (hasEntered(giveawayId, interaction.user.id)) {
+    await interaction.reply({ content: 'You\'ve already entered this giveaway!', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  enterGiveaway(giveawayId, interaction.user.id);
+  const count = getEntryCount(giveawayId);
+  await interaction.reply({ content: `🎉 You've entered the giveaway for **${giveaway.game_name}**! (${count} total entries)`, flags: MessageFlags.Ephemeral });
+
+  // Update the giveaway message entry count
+  if (giveaway.message_id && giveaway.channel_id) {
+    try {
+      const ch = await interaction.client.channels.fetch(giveaway.channel_id).catch(() => null);
+      if (ch) {
+        const msg = await ch.messages.fetch(giveaway.message_id).catch(() => null);
+        if (msg?.embeds?.[0]) {
+          const updated = EmbedBuilder.from(msg.embeds[0])
+            .setFooter({ text: `Giveaway #${giveawayId} • ${count} entries` });
+          await msg.edit({ embeds: [updated] }).catch(() => {});
+        }
+      }
+    } catch {}
+  }
+  return true;
+}
+
+async function handleFeedbackButton(interaction) {
+  if (!interaction.isButton() || !interaction.customId.startsWith('feedback:')) return false;
+
+  const parts = interaction.customId.split(':');
+  const requestId = parts[1];
+  const rating = parseInt(parts[2], 10);
+
+  if (hasFeedback(requestId)) {
+    await interaction.reply({ content: 'You already submitted feedback for this ticket. Thanks!', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  submitFeedback(requestId, interaction.user.id, rating);
+
+  const stars = '⭐'.repeat(rating) + '☆'.repeat(5 - rating);
+  await interaction.reply({ content: `Thanks for your feedback! ${stars} (${rating}/5)`, flags: MessageFlags.Ephemeral });
+  return true;
+}
+
 export async function handle(interaction) {
   log(interaction.constructor.name, interaction.customId ?? interaction.commandName ?? '—');
   const handlers = [
+    handleVerifyAnswer,
+    handleVerifyRetry,
     handleManualVerifyScreenshot,
     handleCloseTicket,
     handleClaimRequest,
@@ -495,6 +569,9 @@ export async function handle(interaction) {
     handleAutoCodeModal,
     handlePreorderClaim,
     handleTipVerifyButton,
+    handleGiveawayEnter,
+    handleFeedbackButton,
+    handleBulkCodeModal,
     doneHandleCopyButton,
     handleCodeWorkedButton,
     handleRateButton,

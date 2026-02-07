@@ -1,6 +1,7 @@
 import { db, scheduleSave } from '../db/index.js';
 import { getGameByAppId, getGameDisplayName } from '../utils/games.js';
 import { EmbedBuilder } from 'discord.js';
+import { getUserTierInfo, TIERS } from './tiers.js';
 
 export function joinWaitlist(userId, gameAppId) {
   db.prepare(
@@ -86,14 +87,24 @@ export async function notifyWaitlistAndClear(client, gameAppId) {
   const game = getGameByAppId(gameAppId);
   const name = game ? getGameDisplayName(game) : `App ${gameAppId}`;
 
-  const embed = new EmbedBuilder()
-    .setColor(0x57f287)
-    .setTitle('🔔 Game back in stock!')
-    .setDescription(`**${name}** is back in stock! Head to the ticket panel to request it.`)
-    .setFooter({ text: 'You were on the waitlist for this game' })
-    .setTimestamp();
+  // Sort by tier priority (higher tiers notified first)
+  waiters.sort((a, b) => {
+    const tierA = getUserTierInfo(a.user_id);
+    const tierB = getUserTierInfo(b.user_id);
+    return (TIERS[tierB.tier]?.level ?? 0) - (TIERS[tierA.tier]?.level ?? 0);
+  });
 
   for (const w of waiters) {
+    const tierInfo = getUserTierInfo(w.user_id);
+    const tierNote = tierInfo.tier !== 'none'
+      ? `\n${TIERS[tierInfo.tier].emoji} As a **${TIERS[tierInfo.tier].label}** supporter, you're getting this notification first!`
+      : '';
+    const embed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle('🔔 Game back in stock!')
+      .setDescription(`**${name}** is back in stock! Head to the ticket panel to request it.${tierNote}`)
+      .setFooter({ text: 'You were on the waitlist for this game' })
+      .setTimestamp();
     try {
       const user = await client.users.fetch(w.user_id).catch(() => null);
       if (user) await user.send({ embeds: [embed] }).catch(() => {});

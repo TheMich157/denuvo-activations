@@ -18,6 +18,7 @@ import {
   import { isWhitelisted } from '../utils/whitelist.js';
   import { isAway } from './activatorStatus.js';
   import { notifyActivators } from './statusNotify.js';
+  import { getUserTierInfo, getAdjustedCooldown, TIERS } from './tiers.js';
   
   export async function createTicketForGame(interaction, appId, options = {}) {
     const { requireTicketCategory = false } = options;
@@ -48,7 +49,23 @@ import {
     }
   
     const cooldownUntil = isActivator(interaction.member) ? null : checkCooldown(interaction.user.id, game.appId);
-    if (cooldownUntil) {
+    const tierInfo = getUserTierInfo(interaction.user.id);
+    if (cooldownUntil && tierInfo.tier !== 'none') {
+      // Tier members get reduced cooldown
+      const baseCd = getCooldownHours(game.appId);
+      const adjustedCd = getAdjustedCooldown(baseCd, interaction.user.id);
+      const adjustedEnd = Date.now() - ((baseCd - adjustedCd) * 3600000);
+      if (cooldownUntil > adjustedEnd) {
+        const mins = Math.ceil((cooldownUntil - (baseCd - adjustedCd) * 3600000 - Date.now()) / 60000);
+        if (mins > 0) {
+          return {
+            ok: false,
+            error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${adjustedCd}h — ${TIERS[tierInfo.tier].emoji} tier benefit).`,
+          };
+        }
+      }
+      // If adjusted cooldown has passed, allow through
+    } else if (cooldownUntil) {
       const mins = Math.ceil((cooldownUntil - Date.now()) / 60000);
       const hoursLabel = getCooldownHours(game.appId) === 48 ? '48 hours (high demand)' : '24 hours';
       return {
@@ -57,9 +74,9 @@ import {
       };
     }
   
-    // Queue priority: VIP users (whitelisted + high points) get a priority tag
+    // Queue priority: VIP users (whitelisted + high points) OR tier members get a priority tag
     const buyerPoints = getBalance(interaction.user.id);
-    const isVip = isWhitelisted(interaction.user.id) && buyerPoints >= 100;
+    const isVip = (isWhitelisted(interaction.user.id) && buyerPoints >= 100) || tierInfo.tier !== 'none';
 
     const requestId = createRequest(interaction.user.id, game.appId, game.name);
   
@@ -152,9 +169,10 @@ import {
     }
     components = [new ActionRowBuilder().addComponents(actionComponents)];
   } else {
-    const vipTag = isVip ? ' ⭐ **VIP**' : '';
+    const tierBadge = tierInfo.tier !== 'none' ? ` ${TIERS[tierInfo.tier].emoji} **${TIERS[tierInfo.tier].label}**` : '';
+    const vipTag = isVip ? (tierBadge || ' ⭐ **VIP**') : '';
     mainEmbed = new EmbedBuilder()
-      .setColor(isVip ? 0xf1c40f : 0x5865f2)
+      .setColor(isVip ? (TIERS[tierInfo.tier]?.color || 0xf1c40f) : 0x5865f2)
       .setTitle(`🎮 Activation Request: ${getGameDisplayName(game)}`)
       .setDescription(
         [
