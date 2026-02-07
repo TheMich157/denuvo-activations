@@ -8,6 +8,9 @@ import { getCooldownHours } from '../utils/games.js';
 import { db } from '../db/index.js';
 import { saveTranscript } from './transcript.js';
 import { addWarning } from './warnings.js';
+import { removeStaleUnverifiedClaims, getPreorderSpots, formatSpotsText, buildPreorderEmbed } from './preorder.js';
+import { config } from '../config.js';
+import { EmbedBuilder } from 'discord.js';
 
 const log = debug('ticketAutoClose');
 
@@ -15,6 +18,7 @@ let clientRef = null;
 let intervalId = null;
 
 const STALE_TICKET_MINUTES = 120; // 2 hours idle for in_progress tickets
+const STALE_CLAIM_HOURS = 48;     // unverified preorder claims released after 48h
 
 export function startTicketAutoClose(client) {
   clientRef = client;
@@ -23,6 +27,7 @@ export function startTicketAutoClose(client) {
   intervalId = setInterval(() => {
     runCheck(verifyDeadlineMinutes).catch((err) => log('Check failed:', err?.message));
     runStaleCheck().catch((err) => log('Stale check failed:', err?.message));
+    runStaleClaimCheck().catch((err) => log('Stale claim check failed:', err?.message));
   }, checkIntervalMs);
   runCheck(verifyDeadlineMinutes).catch((err) => {
     log('First run check failed:', err?.message);
@@ -187,5 +192,86 @@ async function runStaleCheck() {
     } catch (e) {
       log('Auto-warn failed:', e?.message);
     }
+  }
+}
+
+/**
+ * Release stale unverified preorder claims after STALE_CLAIM_HOURS.
+ * DMs the user and updates the forum post.
+ */
+async function runStaleClaimCheck() {
+  if (!clientRef) return;
+  const { removed, claims } = removeStaleUnverifiedClaims(STALE_CLAIM_HOURS);
+  if (removed === 0) return;
+
+  log(`Released ${removed} stale unverified preorder claim(s)`);
+
+  // Group by preorder to batch forum post updates
+  const byPreorder = new Map();
+  for (const claim of claims) {
+    if (!byPreorder.has(claim.preorder_id)) byPreorder.set(claim.preorder_id, []);
+    byPreorder.get(claim.preorder_id).push(claim);
+  }
+
+  // DM each user
+  for (const claim of claims) {
+    try {
+      const user = await clientRef.users.fetch(claim.user_id).catch(() => null);
+      if (user) {
+        await user.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xfee75c)
+              .setTitle('⏰ Preorder Spot Released')
+              .setDescription(
+                [
+                  `Your reserved spot on preorder **#${claim.preorder_id}** (${claim.game_name}) has been **released** because you didn't verify your donation within **${STALE_CLAIM_HOURS} hours**.`,
+                  '',
+                  'If you still want this preorder, you can reserve a new spot and post your Ko-fi receipt to verify.',
+                ].join('\n')
+              )
+              .setTimestamp(),
+          ],
+        }).catch(() => {});
+      }
+    } catch {}
+  }
+
+  // Update forum posts for affected preorders
+  for (const [preorderId, preorderClaims] of byPreorder) {
+    const threadId = preorderClaims[0]?.thread_id;
+    if (!threadId) continue;
+    try {
+      const thread = await clientRef.channels.fetch(threadId).catch(() => null);
+      if (!thread) continue;
+
+      // Update starter message embed
+      const starterMessage = await thread.fetchStarterMessage().catch(() => null);
+      if (starterMessage) {
+        const { getPreorder } = await import('./preorder.js');
+        const preorder = getPreorder(preorderId);
+        if (preorder) {
+          const updatedEmbed = buildPreorderEmbed({
+            preorder, preorderId,
+            kofiUrl: config.kofiUrl,
+            tipChannelId: config.tipVerifyChannelId,
+          });
+          await starterMessage.edit({ embeds: [updatedEmbed] }).catch(() => {});
+        }
+      }
+
+      // Notify in thread
+      const spots = getPreorderSpots(preorderId);
+      const releasedUsers = preorderClaims.map((c) => `<@${c.user_id}>`).join(', ');
+      await thread.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xfee75c)
+            .setTitle('⏰ Stale Spots Released')
+            .setDescription(`**${preorderClaims.length}** unverified spot(s) released after ${STALE_CLAIM_HOURS}h: ${releasedUsers}\n🎟️ ${formatSpotsText(spots)}`)
+            .setTimestamp(),
+        ],
+      }).catch(() => {});
+    } catch {}
   }
 }

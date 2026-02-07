@@ -25,6 +25,8 @@ import {
   getPreorderSpots,
   isPreorderFull,
   closePreorder,
+  formatSpotsText,
+  buildPreorderEmbed,
 } from '../services/preorder.js';
 import {
   logPreorderVerify,
@@ -111,17 +113,6 @@ function detectKofiPayment(text) {
 }
 
 /**
- * Format spots text showing claimed / verified / remaining.
- */
-function formatSpotsText(spots) {
-  if (!spots) return 'Unknown';
-  if (spots.unlimited) {
-    return `${spots.claimed} claimed • ${spots.verified} verified`;
-  }
-  return `${spots.claimed} claimed • ${spots.verified}/${spots.total} verified • **${spots.remaining}** remaining`;
-}
-
-/**
  * Update the original preorder forum post embed with the latest spot counts.
  */
 async function updatePreorderForumPost(client, preorder, preorderId) {
@@ -129,47 +120,13 @@ async function updatePreorderForumPost(client, preorder, preorderId) {
   try {
     const thread = await client.channels.fetch(preorder.thread_id).catch(() => null);
     if (!thread) return;
-
     const starterMessage = await thread.fetchStarterMessage().catch(() => null);
     if (!starterMessage) return;
-
-    const spots = getPreorderSpots(preorderId);
-    const currentPreorder = getPreorder(preorderId);
-    const status = currentPreorder?.status || preorder.status;
-    const spotsText = formatSpotsText(spots);
-
-    const statusEmoji = status === 'open' ? '🟢 Open' : status === 'closed' ? '🔴 Closed' : status === 'fulfilled' ? '✅ Fulfilled' : status;
-
-    const updatedEmbed = new EmbedBuilder()
-      .setColor(status === 'open' ? 0xe91e63 : status === 'closed' ? 0xed4245 : 0x57f287)
-      .setTitle(`🛒 Preorder #${preorderId}: ${preorder.game_name}`)
-      .setDescription(
-        [
-          preorder.description || `Preorder for **${preorder.game_name}** is now open!`,
-          '',
-          `**💰 Minimum donation:** $${preorder.price.toFixed(2)}`,
-          `**🎟️ Spots:** ${spotsText}`,
-          `**🔗 Donate:** [Ko-fi](${config.kofiUrl})`,
-          '',
-          '**How to claim your spot:**',
-          `1. Click **"Reserve Spot"** to hold your place`,
-          `2. Donate at least **$${preorder.price.toFixed(2)}** on [Ko-fi](${config.kofiUrl})`,
-          `3. Post your receipt screenshot in <#${config.tipVerifyChannelId || 'tip-verify'}> with **#${preorderId}**`,
-          '4. Bot auto-verifies your payment and **confirms your spot**',
-          '5. Once fulfilled, you\'ll receive your activation!',
-          '',
-          '> Reserved spots must be verified within 48 hours or they will be released.',
-        ].join('\n')
-      )
-      .addFields(
-        { name: '🎮 Game', value: preorder.game_name, inline: true },
-        { name: '📋 Status', value: statusEmoji, inline: true },
-        { name: '🎟️ Spots', value: spotsText, inline: true },
-        { name: '👤 Created by', value: `<@${preorder.created_by}>`, inline: true },
-      )
-      .setFooter({ text: `Preorder #${preorderId} • ${spotsText}` })
-      .setTimestamp();
-
+    const updatedEmbed = buildPreorderEmbed({
+      preorder, preorderId,
+      kofiUrl: config.kofiUrl,
+      tipChannelId: config.tipVerifyChannelId,
+    });
     await starterMessage.edit({ embeds: [updatedEmbed] }).catch(() => {});
   } catch {}
 }
