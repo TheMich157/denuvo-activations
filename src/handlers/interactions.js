@@ -137,7 +137,7 @@ async function handleAutoCodeButton(interaction) {
     : null;
   if (ticketChannel?.send) {
     await ticketChannel.send({
-      content: `⏳ **Generating your code...** (trying saved session first). You'll get the code here as soon as it's ready.`,
+      content: `⏳ **Generating your code...** This may take a moment.`,
     }).catch(() => {});
   }
 
@@ -155,8 +155,7 @@ async function handleAutoCodeButton(interaction) {
     });
   } catch (err) {
     const msg = err?.message || 'Generation failed.';
-    const needsConfirmationCode = msg.includes('Confirmation code') || msg.includes('Steam Guard') || msg.includes('2FA');
-    if (needsConfirmationCode) {
+    if (msg.includes('Confirmation code')) {
       await interaction.editReply({
         content: '📧 **Steam sent a confirmation code to your email.** Enter the 5-digit code below.',
         components: [

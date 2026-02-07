@@ -73,7 +73,9 @@ Optional: `npm install playwright` to enable automated code generation for activ
 
 - Config: `src/config/drm.config.js` — adjust selectors if the site changes
 - Env: `DRM_BASE_URL`, `DRM_TIMEOUT_MS`
-- Requires 2FA code at runtime (Steam Guard / Mobile Authenticator)
+- When the session needs it, Steam may ask for the 5-digit confirmation code sent to the activator’s email.
+
+**Deploying on Render (or similar PaaS):** The default Node image usually doesn’t have Playwright’s browser or the required system libraries (e.g. libgtk-4). In that case the bot shows a clear message and activators use **Done** to paste the code from drm.steam.run manually. To enable automation on Render you’d need a Docker-based service using an image that includes Chromium and its dependencies (e.g. a Playwright base image).
 
 ## Safety
 
