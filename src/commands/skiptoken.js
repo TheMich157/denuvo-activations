@@ -7,7 +7,7 @@ import { requireGuild } from '../utils/guild.js';
 export const data = new SlashCommandBuilder()
   .setName('skiptoken')
   .setDescription('Cooldown skip tokens')
-  .setContexts(0)
+  .setContexts(0, 1)
   .addSubcommand((sub) =>
     sub.setName('buy')
       .setDescription(`Buy a cooldown skip token (${SKIP_TOKEN_COST} points)`)
@@ -25,12 +25,11 @@ export const data = new SlashCommandBuilder()
   );
 
 export async function execute(interaction) {
-  const guildErr = requireGuild(interaction);
-  if (guildErr) return interaction.reply({ content: guildErr, flags: MessageFlags.Ephemeral });
-
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'buy') {
+    const guildErr = requireGuild(interaction);
+    if (guildErr) return interaction.reply({ content: guildErr, flags: MessageFlags.Ephemeral });
     const result = buyToken(interaction.user.id);
     if (!result.ok) {
       return interaction.reply({ content: result.error, flags: MessageFlags.Ephemeral });
@@ -71,6 +70,8 @@ export async function execute(interaction) {
   }
 
   if (sub === 'give') {
+    const guildErr = requireGuild(interaction);
+    if (guildErr) return interaction.reply({ content: guildErr, flags: MessageFlags.Ephemeral });
     if (!isActivator(interaction.member)) {
       return interaction.reply({ content: 'Staff only.', flags: MessageFlags.Ephemeral });
     }
