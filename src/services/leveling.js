@@ -191,16 +191,24 @@ export function resetLevel(userId) {
 // ─── Level-up visual helpers ────────────────────────────────────
 
 const RANK_TITLES = [
-  { min: 60, title: 'Mythic',    emoji: '\uD83C\uDFC6' },
-  { min: 50, title: 'Legendary', emoji: '\uD83D\uDD25' },
-  { min: 40, title: 'Master',    emoji: '\u2B50' },
-  { min: 30, title: 'Expert',    emoji: '\uD83D\uDCA0' },
-  { min: 20, title: 'Veteran',   emoji: '\uD83C\uDF96\uFE0F' },
-  { min: 15, title: 'Advanced',  emoji: '\uD83D\uDEE1\uFE0F' },
-  { min: 10, title: 'Seasoned',  emoji: '\u2694\uFE0F' },
-  { min: 5,  title: 'Regular',   emoji: '\uD83D\uDFE2' },
-  { min: 2,  title: 'Member',    emoji: '\uD83D\uDFE1' },
-  { min: 0,  title: 'Newcomer',  emoji: '\u26AA' },
+  { min: 250, title: 'Transcendent', emoji: '\uD83D\uDCAB' },
+  { min: 200, title: 'Godlike',    emoji: '\uD83D\uDC7D' },
+  { min: 175, title: 'Eternal',     emoji: '\uD83C\uDF1F' },
+  { min: 150, title: 'Transcendent', emoji: '\uD83D\uDCAB' },
+  { min: 125, title: 'Immortal',    emoji: '\u2728' },
+  { min: 100, title: 'Divine',      emoji: '\uD83D\uDC8E' },
+  { min: 85,  title: 'Ascendant',   emoji: '\uD83D\uDD31' },
+  { min: 70,  title: 'Champion',    emoji: '\uD83C\uDFF5\uFE0F' },
+  { min: 60,  title: 'Mythic',      emoji: '\uD83C\uDFC6' },
+  { min: 50,  title: 'Legendary',   emoji: '\uD83D\uDD25' },
+  { min: 40,  title: 'Master',      emoji: '\u2B50' },
+  { min: 30,  title: 'Expert',      emoji: '\uD83D\uDCA0' },
+  { min: 20,  title: 'Veteran',     emoji: '\uD83C\uDF96\uFE0F' },
+  { min: 15,  title: 'Advanced',    emoji: '\uD83D\uDEE1\uFE0F' },
+  { min: 10,  title: 'Seasoned',    emoji: '\u2694\uFE0F' },
+  { min: 5,   title: 'Regular',     emoji: '\uD83D\uDFE2' },
+  { min: 2,   title: 'Member',      emoji: '\uD83D\uDFE1' },
+  { min: 0,   title: 'Newcomer',    emoji: '\u26AA' },
 ];
 
 export function getLevelTitle(level) {

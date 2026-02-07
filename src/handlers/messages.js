@@ -34,6 +34,7 @@ import {
 } from '../services/activationLog.js';
 import { startVerificationInChannel } from '../services/verification.js';
 import { addMessageXp, xpForLevel, getLevelTitle, getLevelEmoji, progressBar } from '../services/leveling.js';
+import { getDiscountedPrice } from '../services/tiers.js';
 
 const IMAGE_EXT = /\.(png|jpg|jpeg|webp|gif)(\?.*)?$/i;
 const FAIL_THRESHOLD = 5;
@@ -141,12 +142,17 @@ async function handleTipVerification(message) {
     // If just text with a preorder mention but no image
     const preorderId = parsePreorderIdFromText(message.content);
     if (preorderId) {
+      // Fetch the preorder to show its actual price (may differ from the global default)
+      const po = getPreorder(preorderId);
+      const poPrice = po?.price || config.minDonation;
+      const userPrice = getDiscountedPrice(poPrice, message.author.id);
+      const priceStr = userPrice < poPrice ? `$${userPrice.toFixed(2)} (your tier price)` : `$${poPrice.toFixed(2)}`;
       const embed = new EmbedBuilder()
         .setColor(0xfee75c)
         .setTitle('📸 Proof Required')
         .setDescription(
           `Please attach a **screenshot** of your Ko-fi tip/donation receipt for preorder **#${preorderId}**.\n\n` +
-          `The screenshot should clearly show the payment amount ($${config.minDonation}+ minimum).`
+          `The screenshot should clearly show the payment amount (${priceStr}+ minimum).`
         )
         .setTimestamp();
       await message.reply({ embeds: [embed] });
@@ -237,8 +243,9 @@ async function handleTipVerification(message) {
     return true;
   }
 
-  // Determine verification
-  const minDonation = preorder.price || config.minDonation;
+  // Determine verification — use preorder-specific price & apply tier discount
+  const basePrice = preorder.price || config.minDonation;
+  const minDonation = getDiscountedPrice(basePrice, message.author.id);
   const meetsAmount = amount !== null && amount >= minDonation;
   const autoVerified = isKofi && meetsAmount;
 

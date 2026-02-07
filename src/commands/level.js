@@ -42,7 +42,7 @@ export const data = new SlashCommandBuilder()
         o.setName('user').setDescription('Target user').setRequired(true)
       )
       .addIntegerOption((o) =>
-        o.setName('level').setDescription('Level to set (0-100)').setRequired(true).setMinValue(0).setMaxValue(100)
+        o.setName('level').setDescription('Level to set (0-200)').setRequired(true).setMinValue(0).setMaxValue(200)
       )
   )
   .addSubcommand((sub) =>
@@ -101,9 +101,9 @@ async function handleCheck(interaction) {
   const totalTracked = getTotalTracked();
   const cumXp = totalXpForLevel(level) + xp;
 
-  // Color gradient based on level
-  const colors = [0x95a5a6, 0x3498db, 0x2ecc71, 0xe67e22, 0xe74c3c, 0x9b59b6, 0xf1c40f, 0xe91e63];
-  const colorIndex = Math.min(Math.floor(level / 7), colors.length - 1);
+  // Color gradient based on level (scales to 200)
+  const colors = [0x95a5a6, 0x3498db, 0x2ecc71, 0xe67e22, 0xe74c3c, 0x9b59b6, 0xf1c40f, 0xe91e63, 0x1abc9c, 0x5865f2, 0xff00ff];
+  const colorIndex = Math.min(Math.floor(level / 20), colors.length - 1);
 
   const embed = new EmbedBuilder()
     .setColor(colors[colorIndex])

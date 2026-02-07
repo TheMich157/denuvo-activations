@@ -76,7 +76,21 @@ export function buildPanelMessagePayload() {
   if (restock.in1h > 0) regenParts.push(`**${restock.in1h}** in <1h`);
   if (restock.in6h > 0) regenParts.push(`**${restock.in6h}** in <6h`);
   if (restock.in24h > 0) regenParts.push(`**${restock.in24h}** in <24h`);
-  const regenText = regenParts.length > 0 ? regenParts.join(' • ') : 'None';
+  if (restock.total > restock.in24h) regenParts.push(`**${restock.total - restock.in24h}** in 24h+`);
+  let regenText;
+  if (regenParts.length > 0) {
+    regenText = regenParts.join(' • ') + ` (${restock.total} total)`;
+    if (restock.nextAt) {
+      const nextMs = new Date(restock.nextAt + 'Z').getTime() - Date.now();
+      if (nextMs > 0) {
+        const mins = Math.ceil(nextMs / 60_000);
+        const timeStr = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+        regenText += `\nNext token in **${timeStr}**`;
+      }
+    }
+  } else {
+    regenText = 'All stocked up — no pending regeneration';
+  }
 
   const embed = new EmbedBuilder()
     .setColor(0x1b2838)

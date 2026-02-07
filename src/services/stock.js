@@ -64,22 +64,28 @@ export function getGlobalStockStats() {
 }
 
 export function getRestockStats() {
+  // Use datetime(restock_at) to normalise both ISO 8601 ('T'/'Z') and SQLite format values
   const in1h = db.prepare(
-    `SELECT COUNT(*) AS n FROM stock_restock_queue WHERE restock_at > datetime('now') AND restock_at <= datetime('now', '+1 hour')`
+    `SELECT COUNT(*) AS n FROM stock_restock_queue WHERE datetime(restock_at) > datetime('now') AND datetime(restock_at) <= datetime('now', '+1 hour')`
   ).get();
   const in6h = db.prepare(
-    `SELECT COUNT(*) AS n FROM stock_restock_queue WHERE restock_at > datetime('now') AND restock_at <= datetime('now', '+6 hours')`
+    `SELECT COUNT(*) AS n FROM stock_restock_queue WHERE datetime(restock_at) > datetime('now') AND datetime(restock_at) <= datetime('now', '+6 hours')`
   ).get();
   const in24h = db.prepare(
-    `SELECT COUNT(*) AS n FROM stock_restock_queue WHERE restock_at > datetime('now') AND restock_at <= datetime('now', '+24 hours')`
+    `SELECT COUNT(*) AS n FROM stock_restock_queue WHERE datetime(restock_at) > datetime('now') AND datetime(restock_at) <= datetime('now', '+24 hours')`
   ).get();
   const total = db.prepare(
-    `SELECT COUNT(*) AS n FROM stock_restock_queue WHERE restock_at > datetime('now')`
+    `SELECT COUNT(*) AS n FROM stock_restock_queue WHERE datetime(restock_at) > datetime('now')`
+  ).get();
+  // Find the soonest restock time for display
+  const nextRow = db.prepare(
+    `SELECT datetime(restock_at) AS t FROM stock_restock_queue WHERE datetime(restock_at) > datetime('now') ORDER BY datetime(restock_at) ASC LIMIT 1`
   ).get();
   return {
     in1h: in1h?.n ?? 0,
     in6h: in6h?.n ?? 0,
     in24h: in24h?.n ?? 0,
     total: total?.n ?? 0,
+    nextAt: nextRow?.t ?? null,
   };
 }

@@ -48,7 +48,9 @@ export function decrementActivatorStock(activatorId, gameAppId) {
     UPDATE activator_games SET stock_quantity = max(0, stock_quantity - 1)
     WHERE activator_id = ? AND game_app_id = ?
   `).run(activatorId, gameAppId);
-  const restockAt = new Date(Date.now() + (config.restockHours || 24) * 60 * 60 * 1000).toISOString();
+  // Store in SQLite datetime format (space separator, no Z) so string comparisons with datetime('now') work
+  const restockAt = new Date(Date.now() + (config.restockHours || 24) * 60 * 60 * 1000)
+    .toISOString().replace('T', ' ').slice(0, 19);
   db.prepare(
     'INSERT INTO stock_restock_queue (activator_id, game_app_id, restock_at) VALUES (?, ?, ?)'
   ).run(activatorId, gameAppId, restockAt);
@@ -204,7 +206,7 @@ export function getAvailableStockForGame(gameAppId) {
  */
 export function processRestockQueue() {
   const rows = db.prepare(
-    `SELECT id, activator_id, game_app_id FROM stock_restock_queue WHERE restock_at <= datetime('now')`
+    `SELECT id, activator_id, game_app_id FROM stock_restock_queue WHERE datetime(restock_at) <= datetime('now')`
   ).all();
   for (const row of rows) {
     db.prepare(
@@ -223,7 +225,7 @@ export function processRestockQueue() {
 export function cleanupOldData() {
   // Expired restock queue entries (processed > 1h ago)
   db.prepare(
-    `DELETE FROM stock_restock_queue WHERE restock_at < datetime('now', '-1 hour')`
+    `DELETE FROM stock_restock_queue WHERE datetime(restock_at) < datetime('now', '-1 hour')`
   ).run();
 
   // Expired activation cooldowns

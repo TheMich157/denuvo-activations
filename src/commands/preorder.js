@@ -183,6 +183,8 @@ export async function execute(interaction) {
             },
           });
           setPreorderThread(preorderId, forumPost.id);
+          // Lock the thread so users interact via buttons only
+          await forumPost.setLocked(true).catch(() => {});
         }
       } catch (err) {
         // Continue even if forum post creation fails

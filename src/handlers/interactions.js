@@ -502,7 +502,7 @@ async function handleTipVerifyButton(interaction) {
                   `Your tip proof for preorder **#${preorderId}** (${preorder.game_name}) was rejected.`,
                   'Your reserved spot has been **released**.',
                   '',
-                  `Please submit a clearer screenshot of your Ko-fi donation receipt (minimum $${preorder.price.toFixed(2)}).`,
+                  `Please submit a clearer screenshot of your Ko-fi donation receipt (minimum $${getDiscountedPrice(preorder.price, userId).toFixed(2)}).`,
                   'You can click **"Reserve Spot"** again on the preorder post after re-donating.',
                 ].join('\n')
               )
