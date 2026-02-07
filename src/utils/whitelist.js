@@ -1,28 +1,38 @@
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, watchFile } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { isActivator } from './activator.js';
 import { ACTIVATOR_COMMANDS, WHITELISTED_COMMANDS, STAFF_COMMANDS, PUBLIC_COMMANDS } from '../config/commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const whitelistPath = join(__dirname, '../../whitelist.json');
 
 let cachedIds = null;
 
 function loadWhitelist() {
   if (cachedIds !== null) return cachedIds;
-  const path = join(__dirname, '../../whitelist.json');
-  if (!existsSync(path)) {
+  if (!existsSync(whitelistPath)) {
     cachedIds = new Set();
     return cachedIds;
   }
   try {
-    const data = JSON.parse(readFileSync(path, 'utf8'));
+    const data = JSON.parse(readFileSync(whitelistPath, 'utf8'));
     cachedIds = new Set(Array.isArray(data) ? data.map(String) : []);
   } catch {
     cachedIds = new Set();
   }
   return cachedIds;
 }
+
+// Auto-invalidate cache when whitelist.json changes on disk
+try {
+  if (existsSync(whitelistPath)) {
+    watchFile(whitelistPath, { interval: 5000 }, () => {
+      cachedIds = null;
+      console.log('[Whitelist] File changed — cache invalidated');
+    });
+  }
+} catch {}
 
 export function isWhitelisted(userId) {
   return loadWhitelist().has(String(userId));

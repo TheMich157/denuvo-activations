@@ -1,5 +1,6 @@
 import { getActiveGiveaways, pickWinners, endGiveaway, getEntryCount } from './giveaway.js';
 import { EmbedBuilder } from 'discord.js';
+import { db } from '../db/index.js';
 
 const CHECK_INTERVAL = 60_000; // Check every minute
 
@@ -39,9 +40,11 @@ export function startGiveawayScheduler(client) {
             } catch {}
           }
 
-          // DM winners
+          // DM winners (respect notify_giveaway preference)
           for (const winnerId of winners) {
             try {
+              const prefs = db.prepare('SELECT notify_giveaway FROM users WHERE id = ?').get(winnerId);
+              if ((prefs?.notify_giveaway ?? 1) === 0) continue;
               const user = await client.users.fetch(winnerId).catch(() => null);
               if (user) {
                 await user.send({

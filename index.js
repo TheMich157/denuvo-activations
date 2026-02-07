@@ -69,7 +69,7 @@ client.once(Events.ClientReady, async (c) => {
   setActivationLogClient(client);
   startStockRestock(client);
   startDailyDigest(client);
-  startBackupService();
+  startBackupService(client);
   startLeaderboardScheduler(client);
   startGiveawayScheduler(client);
   setPanelClient(client, buildPanelMessagePayload);
@@ -86,6 +86,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand()) {
     const cmd = commands.get(interaction.commandName);
     if (!cmd?.execute) return;
+    // Allow everyone to use /skiptoken balance and /skiptoken buy, even though the main command is whitelisted
+    if (
+      interaction.commandName === 'skiptoken' &&
+      ['balance', 'buy'].includes(interaction.options?.getSubcommand(false))
+    ) {
+      try {
+        return await cmd.execute(interaction);
+      } catch (err) {
+        console.error(`[Command] /${interaction.commandName} ${interaction.options?.getSubcommand(false)} error:`, err);
+        const content = 'Something went wrong running this command. Please try again.';
+        if (interaction.deferred || interaction.replied) {
+          return interaction.editReply({ content }).catch(() => {});
+        }
+        return interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
+      }
+    }
+
     const { allowed, reason } = canUseCommand(
       interaction.user.id,
       interaction.commandName,

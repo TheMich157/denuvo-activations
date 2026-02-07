@@ -95,6 +95,12 @@ export async function notifyWaitlistAndClear(client, gameAppId) {
   });
 
   for (const w of waiters) {
+    // Respect notify_waitlist preference
+    try {
+      const prefs = db.prepare('SELECT dm_notifications, notify_waitlist FROM users WHERE id = ?').get(w.user_id);
+      if ((prefs?.dm_notifications ?? 1) === 0 || (prefs?.notify_waitlist ?? 1) === 0) continue;
+    } catch {}
+
     const tierInfo = getUserTierInfo(w.user_id);
     const tierNote = tierInfo.tier !== 'none'
       ? `\n${TIERS[tierInfo.tier].emoji} As a **${TIERS[tierInfo.tier].label}** supporter, you're getting this notification first!`

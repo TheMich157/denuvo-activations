@@ -81,7 +81,16 @@ export function addMessageXp(userId) {
     if (Date.now() - lastXp < XP_COOLDOWN_MS) return null;
   }
 
-  const xpGain = Math.floor(Math.random() * (XP_PER_MESSAGE_MAX - XP_PER_MESSAGE_MIN + 1)) + XP_PER_MESSAGE_MIN;
+  let xpGain = Math.floor(Math.random() * (XP_PER_MESSAGE_MAX - XP_PER_MESSAGE_MIN + 1)) + XP_PER_MESSAGE_MIN;
+
+  // Apply XP boost from shop purchase
+  try {
+    const userRow = db.prepare('SELECT xp_boost_until FROM users WHERE id = ?').get(String(userId));
+    if (userRow?.xp_boost_until && new Date(userRow.xp_boost_until).getTime() > Date.now()) {
+      xpGain *= 2;
+    }
+  } catch {}
+
   const newXp = row.xp + xpGain;
   const newMessages = row.total_messages + 1;
 

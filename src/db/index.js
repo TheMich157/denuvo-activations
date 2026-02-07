@@ -478,6 +478,24 @@ export async function initDb() {
   } catch (e) {
     console.error('[DB] Failed to create user_levels table:', e?.message);
   }
+  // Shop item columns (priority boost, XP boost)
+  try { sqlDb.exec('ALTER TABLE users ADD COLUMN priority_boost INTEGER DEFAULT 0'); } catch {}
+  try { sqlDb.exec('ALTER TABLE users ADD COLUMN xp_boost_until TEXT'); } catch {}
+  // Granular notification settings columns
+  try { sqlDb.exec('ALTER TABLE users ADD COLUMN notify_status INTEGER DEFAULT 1'); } catch {}
+  try { sqlDb.exec('ALTER TABLE users ADD COLUMN notify_waitlist INTEGER DEFAULT 1'); } catch {}
+  try { sqlDb.exec('ALTER TABLE users ADD COLUMN notify_levelup INTEGER DEFAULT 1'); } catch {}
+  try { sqlDb.exec('ALTER TABLE users ADD COLUMN notify_giveaway INTEGER DEFAULT 1'); } catch {}
+  // Daily reward claims
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS daily_claims (
+        user_id TEXT PRIMARY KEY,
+        last_claimed_at TEXT NOT NULL,
+        streak INTEGER DEFAULT 1
+      )
+    `);
+  } catch {}
   return db;
 }
 

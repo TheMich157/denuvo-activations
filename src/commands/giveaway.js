@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { createGiveaway, setGiveawayMessage, getGiveaway, getActiveGiveaways, getEntryCount, endGiveaway, pickWinners } from '../services/giveaway.js';
 import { requireGuild } from '../utils/guild.js';
+import { db } from '../db/index.js';
 
 export const data = new SlashCommandBuilder()
   .setName('giveaway')
@@ -107,9 +108,11 @@ export async function execute(interaction) {
 
     await interaction.reply({ embeds: [embed] });
 
-    // DM winners
+    // DM winners (respect notify_giveaway preference)
     for (const winnerId of winners) {
       try {
+        const prefs = db.prepare('SELECT notify_giveaway FROM users WHERE id = ?').get(winnerId);
+        if ((prefs?.notify_giveaway ?? 1) === 0) continue;
         const user = await interaction.client.users.fetch(winnerId).catch(() => null);
         if (user) {
           await user.send({

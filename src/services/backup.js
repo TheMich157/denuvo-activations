@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, copyFileSync, readdirSync, unlinkSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { EmbedBuilder } from 'discord.js';
 import { debug } from '../utils/debug.js';
+import { loggingConfig } from '../config/logging.js';
 
 const log = debug('backup');
 
@@ -14,6 +16,25 @@ const BACKUP_INTERVAL_MS = parseInt(process.env.BACKUP_INTERVAL_HOURS ?? '6', 10
 const MAX_BACKUPS = parseInt(process.env.MAX_BACKUPS ?? '10', 10);
 
 let intervalId = null;
+let clientRef = null;
+
+/**
+ * Send a backup failure alert to the log channel.
+ */
+async function notifyBackupFailure(errorMessage) {
+  if (!clientRef || !loggingConfig.logChannelId) return;
+  try {
+    const channel = await clientRef.channels.fetch(loggingConfig.logChannelId).catch(() => null);
+    if (!channel?.send) return;
+    const embed = new EmbedBuilder()
+      .setColor(0xed4245)
+      .setTitle('⚠️ Backup Failed')
+      .setDescription(`Database backup failed:\n\`\`\`${errorMessage}\`\`\``)
+      .setFooter({ text: 'Check disk space and permissions' })
+      .setTimestamp();
+    await channel.send({ embeds: [embed] });
+  } catch {}
+}
 
 /**
  * Create a timestamped backup of the database.
@@ -39,6 +60,7 @@ function createBackup() {
     return true;
   } catch (err) {
     log('Backup failed:', err?.message);
+    notifyBackupFailure(err?.message || 'Unknown error');
     return false;
   }
 }
@@ -74,7 +96,8 @@ function cleanupOldBackups() {
 /**
  * Start the periodic backup service.
  */
-export function startBackupService() {
+export function startBackupService(client) {
+  if (client) clientRef = client;
   if (intervalId) clearInterval(intervalId);
 
   // Create initial backup on startup

@@ -56,3 +56,15 @@ export function closeVote(voteId, status = 'added') {
 export function getVote(voteId) {
   return db.prepare('SELECT * FROM game_votes WHERE id = ?').get(voteId);
 }
+
+/**
+ * Get all votes a user has participated in (suggested or voted for).
+ */
+export function getUserVotes(userId) {
+  return db.prepare(`
+    SELECT gv.* FROM game_votes gv
+    JOIN game_vote_users gvu ON gvu.vote_id = gv.id
+    WHERE gvu.user_id = ?
+    ORDER BY gv.status ASC, gv.votes DESC
+  `).all(userId);
+}

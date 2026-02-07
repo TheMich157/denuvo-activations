@@ -14,6 +14,19 @@ function hasDMEnabled(userId) {
 }
 
 /**
+ * Check if a user has status update DMs enabled.
+ */
+function hasStatusDMEnabled(userId) {
+  try {
+    const row = db.prepare('SELECT dm_notifications, notify_status FROM users WHERE id = ?').get(userId);
+    if ((row?.dm_notifications ?? 1) === 0) return false;
+    return (row?.notify_status ?? 1) === 1;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Send a status DM to the buyer when their request status changes.
  * @param {import('discord.js').Client} client
  * @param {string} userId
@@ -22,7 +35,7 @@ function hasDMEnabled(userId) {
  */
 export async function sendStatusDM(client, userId, status, { gameName, issuerName } = {}) {
   try {
-    if (!hasDMEnabled(userId)) return false;
+    if (!hasStatusDMEnabled(userId)) return false;
     const user = await client.users.fetch(userId).catch(() => null);
     if (!user) return false;
 

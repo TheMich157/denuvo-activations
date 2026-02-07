@@ -1,11 +1,22 @@
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync, watchFile } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { isValidAppId } from './validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const listPath = join(__dirname, '../../list.json');
 
 let gamesCache = null;
+
+// Auto-invalidate cache when list.json changes on disk
+try {
+  if (existsSync(listPath)) {
+    watchFile(listPath, { interval: 5000 }, () => {
+      gamesCache = null;
+      console.log('[Games] list.json changed — cache invalidated');
+    });
+  }
+} catch {}
 
 /**
  * Load games only from list.json. Normalizes appId to integer and drops invalid/duplicate entries.

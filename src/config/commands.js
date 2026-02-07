@@ -16,4 +16,5 @@ export const STAFF_COMMANDS = ['away', 'waitlist'];
 export const PUBLIC_COMMANDS = [
   'profile', 'stats', 'leaderboard', 'shop',
   'pricegame', 'settings', 'transfer', 'appeal', 'vote', 'level',
+  'daily', 'cooldown', 'history', 'mywaitlist',
 ];

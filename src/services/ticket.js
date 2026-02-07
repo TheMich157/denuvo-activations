@@ -100,9 +100,18 @@ import {
       }
     }
   
-    // Queue priority: VIP users (whitelisted + high points) OR tier members get a priority tag
+    // Queue priority: VIP users (whitelisted + high points), tier members, or priority boost from shop
     const buyerPoints = getBalance(interaction.user.id);
-    const isVip = (isWhitelisted(interaction.user.id) && buyerPoints >= 100) || tierInfo.tier !== 'none';
+    let hasPriorityBoost = false;
+    try {
+      const boostRow = db.prepare('SELECT priority_boost FROM users WHERE id = ?').get(interaction.user.id);
+      if (boostRow?.priority_boost === 1) {
+        hasPriorityBoost = true;
+        // Consume the one-time boost
+        db.prepare('UPDATE users SET priority_boost = 0, updated_at = datetime(\'now\') WHERE id = ?').run(interaction.user.id);
+      }
+    } catch {}
+    const isVip = (isWhitelisted(interaction.user.id) && buyerPoints >= 100) || tierInfo.tier !== 'none' || hasPriorityBoost;
 
     const requestId = createRequest(interaction.user.id, game.appId, game.name);
 

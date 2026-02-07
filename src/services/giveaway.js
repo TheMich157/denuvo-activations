@@ -1,4 +1,5 @@
 import { db, scheduleSave } from '../db/index.js';
+import crypto from 'crypto';
 
 /**
  * Create a giveaway.
@@ -53,11 +54,16 @@ export function endGiveaway(giveawayId, winners) {
 }
 
 /**
- * Pick random winners from entries.
+ * Pick random winners from entries using Fisher-Yates shuffle (unbiased).
  */
 export function pickWinners(giveawayId, count = 1) {
   const entries = getEntries(giveawayId);
   if (entries.length === 0) return [];
-  const shuffled = entries.sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, Math.min(count, entries.length)).map((e) => e.user_id);
+  // Fisher-Yates shuffle with crypto.randomInt for fairness
+  const arr = [...entries];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(0, i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr.slice(0, Math.min(count, arr.length)).map((e) => e.user_id);
 }

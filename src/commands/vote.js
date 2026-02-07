@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
-import { suggestGame, voteForGame, getTopVotes, hasVoted, closeVote, getVote } from '../services/voting.js';
+import { suggestGame, voteForGame, getTopVotes, hasVoted, closeVote, getVote, getUserVotes } from '../services/voting.js';
 import { requireGuild } from '../utils/guild.js';
 import { getUserTierInfo } from '../services/tiers.js';
 import { isWhitelisted } from '../utils/whitelist.js';
@@ -21,6 +21,10 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub.setName('list')
       .setDescription('View top voted game suggestions')
+  )
+  .addSubcommand((sub) =>
+    sub.setName('mine')
+      .setDescription('View suggestions you\'ve voted for or created')
   )
   .addSubcommand((sub) =>
     sub.setName('close')
@@ -77,6 +81,23 @@ export async function execute(interaction) {
       .setTitle('🗳️ Game Request Votes')
       .setDescription(lines.join('\n'))
       .setFooter({ text: 'Use /vote suggest to add • /vote up id:# to vote' })
+      .setTimestamp();
+    return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+
+  if (sub === 'mine') {
+    const votes = getUserVotes(interaction.user.id);
+    if (votes.length === 0) return interaction.reply({ content: 'You haven\'t voted for or suggested any games yet.', flags: MessageFlags.Ephemeral });
+    const statusEmoji = { open: '🟢', added: '✅', rejected: '❌' };
+    const lines = votes.map((v) => {
+      const emoji = statusEmoji[v.status] ?? '⚪';
+      return `${emoji} **${v.game_name}** — ${v.votes} vote${v.votes !== 1 ? 's' : ''} (#${v.id}) [${v.status}]`;
+    });
+    const embed = new EmbedBuilder()
+      .setColor(0x3498db)
+      .setTitle('🗳️ My Votes & Suggestions')
+      .setDescription(lines.join('\n'))
+      .setFooter({ text: `${votes.length} total` })
       .setTimestamp();
     return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
