@@ -33,7 +33,22 @@ export async function handleMessage(message) {
   const attachment = message.attachments.find((a) => IMAGE_EXT.test(a.url));
   if (!attachment) return;
 
-  const result = await verifyScreenshot(attachment.url);
+  const result = await verifyScreenshot(attachment.url, req.game_name);
+  if (result.gameMismatch) {
+    const expected = req.game_name;
+    const msg =
+      'detectedGame' in result.gameMismatch
+        ? `Your screenshot shows the game folder for **${result.gameMismatch.detectedGame}**, but this ticket is for **${expected}**. Please post a screenshot of the **${expected}** game folder (Properties and WUB).`
+        : `We couldn't find **${expected}** in your screenshot. Please post a screenshot that clearly shows the **${expected}** game folder (right‑click → Properties) and WUB.`;
+    const embed = new EmbedBuilder()
+      .setColor(0xed4245)
+      .setTitle('📸 Wrong game in screenshot')
+      .setDescription(msg)
+      .setFooter({ text: 'The folder name in your screenshot must match the game you requested.' })
+      .setTimestamp();
+    await message.reply({ embeds: [embed] });
+    return;
+  }
   const merged = mergeDetection(message.channelId, {
     hasProperties: result.hasProperties,
     hasWub: result.hasWub,

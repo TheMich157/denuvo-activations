@@ -23,4 +23,9 @@ export const scopes = {
   interaction: 'interaction',
   request: 'request',
   save: 'save',
+  ticketAutoClose: 'ticketAutoClose',
+  activationLog: 'activationLog',
+  drm: 'drm',
+  panel: 'panel',
+  stockRestock: 'stockRestock',
 };

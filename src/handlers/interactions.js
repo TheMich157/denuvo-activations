@@ -5,21 +5,27 @@ import {
   EmbedBuilder,
   MessageFlags,
   PermissionFlagsBits,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from 'discord.js';
 import { debug } from '../utils/debug.js';
 import { isActivator } from '../utils/activator.js';
 
 const log = debug('interaction');
 import { assignIssuer, getRequest, getRequestByChannel, cancelRequest, markScreenshotVerified } from '../services/requests.js';
+import { getCredentials } from '../services/activators.js';
 import { setState, clearState } from '../services/screenshotVerify/state.js';
+import { generateAuthCode } from '../services/drm.js';
+import { completeAndNotifyTicket } from '../commands/done.js';
 import { handleSelect as panelHandleSelect, handleRefresh as panelHandleRefresh } from '../commands/panelHandler.js';
 import { handleSelect as addHandleSelect, handleModal as addHandleModal } from '../commands/add.js';
 import { handleButton as doneHandleButton, handleModal as doneHandleModal, handleCopyButton as doneHandleCopyButton, handleCodeWorkedButton } from '../commands/done.js';
 import { handleButton as invalidHandleButton } from '../commands/invalid.js';
 import { handleButton as callModHandleButton } from '../commands/call_mod.js';
 
-function buildIssuerActionRow() {
-  return new ActionRowBuilder().addComponents(
+function buildIssuerActionRow(requestId, hasAutomated = false) {
+  const components = [
     new ButtonBuilder()
       .setCustomId('done_request')
       .setLabel('Done – enter auth code')
@@ -31,8 +37,18 @@ function buildIssuerActionRow() {
     new ButtonBuilder()
       .setCustomId('close_ticket')
       .setLabel('Close ticket')
-      .setStyle(ButtonStyle.Secondary)
-  );
+      .setStyle(ButtonStyle.Secondary),
+  ];
+  if (hasAutomated) {
+    components.unshift(
+      new ButtonBuilder()
+        .setCustomId(`auto_code:${requestId}`)
+        .setLabel('Get code automatically')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('⚡')
+    );
+  }
+  return new ActionRowBuilder().addComponents(components);
 }
 
 async function handleClaimRequest(interaction) {
@@ -52,6 +68,7 @@ async function handleClaimRequest(interaction) {
       { id: req.issuer_id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
     ]);
   }
+  const hasAutomated = !!getCredentials(req.issuer_id, req.game_app_id);
   const ticketRef = `#${req.id.slice(0, 8).toUpperCase()}`;
   const claimedEmbed = new EmbedBuilder()
     .setColor(0x57f287)
@@ -61,7 +78,9 @@ async function handleClaimRequest(interaction) {
         `**Requester:** <@${req.buyer_id}>`,
         `**Assigned activator:** <@${req.issuer_id}>`,
         '',
-        'Use **Done** to submit the auth code. Press **Help** if you need assistance.',
+        hasAutomated
+          ? '**Automatic:** Use **Get code automatically** (enter 2FA when asked). **Manual:** Use **Done** to paste the code from drm.steam.run yourself. Press **Help** if you need assistance.'
+          : 'Use **Done** to enter the auth code from drm.steam.run (manual method). Press **Help** if you need assistance.',
       ].join('\n')
     )
     .addFields({ name: '📋 Status', value: 'In progress — awaiting auth code', inline: true })
@@ -71,8 +90,75 @@ async function handleClaimRequest(interaction) {
   await interaction.update({
     content: null,
     embeds: [claimedEmbed],
-    components: [buildIssuerActionRow()],
+    components: [buildIssuerActionRow(requestId, hasAutomated)],
   });
+  return true;
+}
+
+async function handleAutoCodeButton(interaction) {
+  if (!interaction.isButton() || !interaction.customId.startsWith('auto_code:')) return false;
+  const requestId = interaction.customId.slice('auto_code:'.length);
+  const req = getRequest(requestId);
+  if (!req || req.issuer_id !== interaction.user.id) {
+    await interaction.reply({ content: 'Invalid or unauthorized.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  const credentials = getCredentials(req.issuer_id, req.game_app_id);
+  if (!credentials) {
+    await interaction.reply({ content: 'Automated credentials not found for this game. Use **Done** to enter the code manually.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  const modal = new ModalBuilder()
+    .setCustomId(`auto_code_modal:${requestId}`)
+    .setTitle('Steam Guard code');
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('twofactor')
+        .setLabel('Current 2FA code')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setPlaceholder('6-digit code from Steam Guard / Authenticator')
+        .setMinLength(5)
+        .setMaxLength(8)
+    )
+  );
+  await interaction.showModal(modal);
+  return true;
+}
+
+async function handleAutoCodeModal(interaction) {
+  if (!interaction.isModalSubmit() || !interaction.customId.startsWith('auto_code_modal:')) return false;
+  const requestId = interaction.customId.slice('auto_code_modal:'.length);
+  const twoFactorCode = interaction.fields.getTextInputValue('twofactor').trim();
+  const req = getRequest(requestId);
+  if (!req || req.issuer_id !== interaction.user.id) {
+    await interaction.reply({ content: 'Invalid or unauthorized.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (req.status !== 'in_progress') {
+    await interaction.reply({ content: 'This request is no longer in progress.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  const credentials = getCredentials(req.issuer_id, req.game_app_id);
+  if (!credentials) {
+    await interaction.reply({ content: 'Automated credentials not available. Use **Done** and enter the code manually.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const code = await generateAuthCode(req.game_app_id, credentials, twoFactorCode);
+    await completeAndNotifyTicket(req, code, interaction.client);
+    await interaction.editReply({
+      content: `✅ **Code generated and sent to the ticket.** **${req.points_charged}** points transferred to you.`,
+    });
+  } catch (err) {
+    const msg = err?.message || 'Generation failed.';
+    await interaction.editReply({
+      content: `❌ **Could not generate code.** ${msg} You can use **Done** to paste the code from drm.steam.run manually.`,
+    });
+  }
   return true;
 }
 
@@ -148,6 +234,8 @@ export async function handle(interaction) {
     handleManualVerifyScreenshot,
     handleCloseTicket,
     handleClaimRequest,
+    handleAutoCodeButton,
+    handleAutoCodeModal,
     doneHandleCopyButton,
     handleCodeWorkedButton,
     panelHandleSelect,

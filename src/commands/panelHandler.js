@@ -29,7 +29,8 @@ export async function handleSelect(interaction) {
     return true;
   }
 
-  await interaction.editReply({ content: ` Ticket created: ${result.channel}. Activators have been notified.` });
+  const channelRef = result.channel ? `${result.channel} (${result.channel.name})` : 'your ticket channel';
+  await interaction.editReply({ content: `Ticket created: ${channelRef}. Activators have been notified.` });
   return true;
 }
 

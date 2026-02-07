@@ -14,13 +14,16 @@ Discord bot for coordinating Denuvo game activations between buyers and activato
    ```
    DISCORD_TOKEN=your_bot_token
    DISCORD_CLIENT_ID=your_application_id
-   ENCRYPTION_KEY=64_character_hex_string  # 32 bytes, e.g. openssl rand -hex 32
-   ACTIVATOR_ROLE_ID=role_id
-   TICKET_CATEGORY_ID=category_for_ticket_channels
-   DAILY_ACTIVATION_LIMIT=5
-   POINTS_PER_ACTIVATION=50
-   GUILD_ID=your_guild_id  # Optional: restricts activator-only commands to the Activator role
-   ```
+ENCRYPTION_KEY=64_character_hex_string  # 32 bytes, e.g. openssl rand -hex 32
+  ACTIVATOR_ROLE_ID=role_id
+  TICKET_CATEGORY_ID=category_for_ticket_channels
+  DAILY_ACTIVATION_LIMIT=5
+  POINTS_PER_ACTIVATION=50
+  GUILD_ID=your_guild_id  # Optional: restricts activator-only commands to the Activator role
+  LOG_CHANNEL_ID=channel_id  # Optional: audit log channel for activations and ticket events
+  TICKET_VERIFY_DEADLINE_MINUTES=5  # Optional: auto-close unverified tickets after N minutes
+  TICKET_AUTOCLOSE_CHECK_INTERVAL_MS=60000  # Optional: interval for auto-close check
+  ```
 
 3. **Generate encryption key**
    ```bash
@@ -76,6 +79,16 @@ Optional: `npm install playwright` to enable automated code generation for activ
 - **Error sanitization** – Internal/crypto errors not exposed to users
 - **Race protection** – Transaction used when claiming requests
 - **Credential handling** – Decrypt wrapped in try/catch, no key leakage
+
+## Audit logging
+
+Optional: set `LOG_CHANNEL_ID` (Discord channel ID) to send audit embeds for:
+
+- **Activation completed** — activator, buyer, game, auth code/token, request ID, timestamp
+- **Ticket auto-closed** — buyer, game, request ID (unverified pending timeout)
+- **Request failed** — e.g. invalid token; activator, buyer, game, reason
+
+Config: `src/config/logging.js`. Default log channel ID is `1469597575211389040` if not set.
 
 ## Data
 

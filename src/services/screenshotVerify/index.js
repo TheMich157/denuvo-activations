@@ -1,4 +1,5 @@
 import { detect } from './detector.js';
+import { checkGameNameInScreenshot } from './gameMatch.js';
 import { extractText as tesseractExtract } from './providers/tesseract.js';
 import { extractText as groqExtract } from './providers/groq.js';
 
@@ -9,9 +10,10 @@ const PROVIDERS = [
 
 /**
  * @param {string} imageUrl - URL of the screenshot (Discord attachment)
- * @returns {Promise<{ verified: boolean; hasProperties: boolean; hasWub: boolean; provider?: string; text?: string; error?: string }>}
+ * @param {string} [expectedGameName] - Game name for this ticket (e.g. "Hogwarts Legacy"); if provided, screenshot must show this game folder, not another game
+ * @returns {Promise<{ verified: boolean; hasProperties: boolean; hasWub: boolean; gameMismatch?: { detectedGame: string } | { expectedNotFound: true }; provider?: string; text?: string; error?: string }>}
  */
-export async function verifyScreenshot(imageUrl) {
+export async function verifyScreenshot(imageUrl, expectedGameName = '') {
   let lastError = null;
   let lastProvider = null;
 
@@ -25,6 +27,23 @@ export async function verifyScreenshot(imageUrl) {
     }
     const text = result.text || '';
     const { hasProperties, hasWub } = detect(text);
+
+    if (expectedGameName && text.length >= 3) {
+      const gameCheck = checkGameNameInScreenshot(text, expectedGameName);
+      if (!gameCheck.ok) {
+        return {
+          verified: false,
+          hasProperties,
+          hasWub,
+          gameMismatch: gameCheck.detectedGame
+            ? { detectedGame: gameCheck.detectedGame }
+            : { expectedNotFound: true },
+          provider: provider.name,
+          text: text.slice(0, 500),
+        };
+      }
+    }
+
     return {
       verified: hasProperties && hasWub,
       hasProperties,

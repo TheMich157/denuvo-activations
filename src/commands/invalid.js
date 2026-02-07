@@ -1,6 +1,7 @@
 import { MessageFlags } from 'discord.js';
 import { failRequest, getPendingRequestForChannel } from '../services/requests.js';
 import { isActivator } from '../utils/activator.js';
+import { logRequestFailed } from '../services/activationLog.js';
 
 export async function handleButton(interaction) {
   if (!interaction.isButton() || interaction.customId !== 'invalid_token') return false;
@@ -18,7 +19,8 @@ export async function handleButton(interaction) {
     return true;
   }
 
-  failRequest(req.id, 'failed');
+  failRequest(req.id, 'invalid_token');
+  await logRequestFailed(req, 'invalid_token');
   await interaction.reply({
     content: 'Token marked as invalid. The requester can open a new ticket to try again.',
   });

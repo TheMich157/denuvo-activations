@@ -9,6 +9,82 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { completeRequest, getRequest, getPendingRequestForChannel } from '../services/requests.js';
+import { logActivation } from '../services/activationLog.js';
+
+const VALIDITY_MINUTES = 30;
+
+/**
+ * Shared: complete the request with auth code, log, update ticket message, and send code embed to ticket.
+ * Used by both manual "Done" modal and auto-generate flow.
+ * @param {Object} req - Request row (must have id, ticket_channel_id, buyer_id, game_name, points_charged)
+ * @param {string} authCode
+ * @param {import('discord.js').Client} client
+ * @returns {Promise<boolean>} - true if completed and sent
+ */
+export async function completeAndNotifyTicket(req, authCode, client) {
+  const completed = completeRequest(req.id, authCode);
+  if (!completed) return false;
+  const updated = getRequest(req.id);
+  if (updated) await logActivation(updated);
+
+  const ticketChannel = req.ticket_channel_id
+    ? await client.channels.fetch(req.ticket_channel_id).catch(() => null)
+    : null;
+  if (!ticketChannel) return true;
+
+  try {
+    const fetched = await ticketChannel.messages.fetch({ limit: 20 });
+    const mainMsg = fetched.find((m) => m.author.id === client.user.id && m.components?.length);
+    if (mainMsg?.editable) {
+      const closeRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('close_ticket').setLabel('Close ticket').setStyle(ButtonStyle.Secondary)
+      );
+      await mainMsg.edit({ components: [closeRow] });
+    }
+  } catch {}
+
+  const expiresAt = Math.floor(Date.now() / 1000) + VALIDITY_MINUTES * 60;
+  const embed = new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle('✅ Authorization code ready')
+    .setDescription(
+      [
+        `Here is your authorization code for **${req.game_name}**. Select the code below and copy it.`,
+        '',
+        '**If you have a problem with it, press Help** to request assistance.',
+      ].join('\n')
+    )
+    .addFields(
+      { name: 'Code', value: `\`\`\`\n${authCode}\n\`\`\``, inline: false },
+      {
+        name: '⏱️ Validity',
+        value: `This code is valid for **${VALIDITY_MINUTES} minutes**. Expires <t:${expiresAt}:R> (<t:${expiresAt}:f>).`,
+        inline: false,
+      }
+    )
+    .addFields({ name: '📋 Status', value: 'Code ready', inline: true })
+    .setFooter({ text: `Ticket #${req.id.slice(0, 8).toUpperCase()} • Copy code or press Help if you need assistance` });
+  const copyRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`auth_copy:${req.id}`)
+      .setLabel('📋 Copy code')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`auth_worked:${req.id}`)
+      .setLabel('✓ Code worked')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId('call_activator')
+      .setLabel('Help')
+      .setStyle(ButtonStyle.Secondary)
+  );
+  await ticketChannel.send({
+    content: `<@${req.buyer_id}>`,
+    embeds: [embed],
+    components: [copyRow],
+  });
+  return true;
+}
 
 export async function handleButton(interaction) {
   if (!interaction.isButton() || interaction.customId !== 'done_request') return false;
@@ -53,68 +129,7 @@ export async function handleModal(interaction) {
     return true;
   }
 
-  completeRequest(requestId, authCode);
-
-  const ticketChannel = req.ticket_channel_id
-    ? await interaction.client.channels.fetch(req.ticket_channel_id).catch(() => null)
-    : interaction.channel;
-  if (ticketChannel) {
-    try {
-      const fetched = await ticketChannel.messages.fetch({ limit: 20 });
-      const mainMsg = fetched.find((m) => m.author.id === interaction.client.user.id && m.components?.length);
-      if (mainMsg?.editable) {
-        const closeRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('close_ticket').setLabel('Close ticket').setStyle(ButtonStyle.Secondary)
-        );
-        await mainMsg.edit({ components: [closeRow] });
-      }
-    } catch {}
-    const VALIDITY_MINUTES = 30;
-    const expiresAt = Math.floor(Date.now() / 1000) + VALIDITY_MINUTES * 60;
-    const embed = new EmbedBuilder()
-      .setColor(0x57f287)
-      .setTitle('✅ Authorization code ready')
-      .setDescription(
-        [
-          `Here is your authorization code for **${req.game_name}**. Select the code below and copy it.`,
-          '',
-          '**If you have a problem with it, press Help** to request assistance.',
-        ].join('\n')
-      )
-      .addFields(
-        {
-          name: 'Code',
-          value: `\`\`\`\n${authCode}\n\`\`\``,
-          inline: false,
-        },
-        {
-          name: '⏱️ Validity',
-          value: `This code is valid for **${VALIDITY_MINUTES} minutes**. Expires <t:${expiresAt}:R> (<t:${expiresAt}:f>).`,
-          inline: false,
-        }
-      )
-      .addFields({ name: '📋 Status', value: 'Code ready', inline: true })
-      .setFooter({ text: `Ticket #${requestId.slice(0, 8).toUpperCase()} • Copy code or press Help if you need assistance` });
-    const copyRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`auth_copy:${requestId}`)
-        .setLabel('📋 Copy code')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`auth_worked:${requestId}`)
-        .setLabel('✓ Code worked')
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId('call_activator')
-        .setLabel('Help')
-        .setStyle(ButtonStyle.Secondary)
-    );
-    await ticketChannel.send({
-      content: `<@${req.buyer_id}>`,
-      embeds: [embed],
-      components: [copyRow],
-    });
-  }
+  await completeAndNotifyTicket(req, authCode, interaction.client);
 
   await interaction.reply({
     content: `✅ **Activation completed.** Auth code sent to ticket. **${req.points_charged}** points transferred to you.`,

@@ -1,4 +1,7 @@
 import { db, scheduleSave } from '../db/index.js';
+import { debug } from '../utils/debug.js';
+
+const log = debug('panel');
 
 export function getPanel() {
   return db.prepare('SELECT guild_id, channel_id, message_id FROM panel WHERE id = 1').get();
@@ -28,16 +31,19 @@ export async function syncPanelMessage(client, payload) {
   try {
     const channel = await client.channels.fetch(panel.channel_id).catch(() => null);
     if (!channel?.isTextBased?.() || channel.isDMBased?.()) {
+      log('Panel channel missing or invalid; clearing panel');
       clearPanel();
       return;
     }
     const message = await channel.messages.fetch(panel.message_id).catch(() => null);
     if (!message) {
+      log('Panel message missing; clearing panel');
       clearPanel();
       return;
     }
     await message.edit(payload);
-  } catch {
+  } catch (err) {
+    log('Panel sync failed:', err?.message);
     clearPanel();
   }
 }
