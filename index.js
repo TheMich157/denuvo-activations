@@ -128,6 +128,17 @@ client.on(Events.GuildMemberAdd, async (member) => {
   }
 });
 
+// Global error handlers to prevent crashes
+process.on('unhandledRejection', (err) => {
+  console.error('[FATAL] Unhandled rejection:', err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err);
+});
+client.on('error', (err) => {
+  console.error('[Discord] Client error:', err);
+});
+
 client.login(config.token).catch((err) => {
   console.error('Login failed:', err);
   process.exit(1);

@@ -174,6 +174,18 @@ async function runStaleCheck() {
       idleMinutes: STALE_TICKET_MINUTES,
     });
 
+    // Notify the assigned activator (issuer) that the ticket was closed
+    if (req.issuer_id) {
+      try {
+        const issuer = await clientRef.users.fetch(req.issuer_id).catch(() => null);
+        if (issuer) {
+          await issuer.send(
+            `ℹ️ Ticket **${req.game_name}** (assigned to you) was auto-closed after **${STALE_TICKET_MINUTES} minutes** of inactivity by <@${req.buyer_id}>.`
+          ).catch(() => {});
+        }
+      } catch {}
+    }
+
     // Auto-warn the requester for inactivity
     try {
       const result = addWarning(

@@ -325,8 +325,11 @@ export async function execute(interaction) {
       .setURL('https://www.sordum.org/9470/'),
   );
 
-  // Split into multiple messages to stay under Discord's 6000-char embed limit
-  await interaction.reply({ embeds: [welcomeEmbed, guideEmbed] });
+  // Acknowledge silently so the slash command invocation is hidden
+  await interaction.reply({ content: '✅ Info panel posted.', flags: MessageFlags.Ephemeral });
+
+  // Post all embeds as regular channel messages (no command trigger visible)
+  await interaction.channel.send({ embeds: [welcomeEmbed, guideEmbed] });
   await interaction.channel.send({ embeds: [toolsEmbed, tierEmbed] });
   await interaction.channel.send({ embeds: [preorderEmbed, cmdEmbed] });
   await interaction.channel.send({ embeds: [rulesEmbed, faqEmbed], components: [row1] });

@@ -40,6 +40,7 @@ import { handleBulkCodeModal } from '../commands/bulkcode.js';
 import { getUserTierInfo, TIERS, getDiscountedPrice } from '../services/tiers.js';
 import { handleVerifyAnswer, handleVerifyRetry } from '../services/verification.js';
 import { handleAppealModal } from '../commands/appeal.js';
+import { isBlacklisted } from '../services/blacklist.js';
 
 function buildIssuerActionRow(requestId, hasAutomated = false) {
   const components = [
@@ -440,6 +441,13 @@ async function handleTipVerifyButton(interaction) {
 
 async function handlePreorderClaim(interaction) {
   if (!interaction.isButton() || !interaction.customId.startsWith('preorder_claim:')) return false;
+
+  // Blacklist guard
+  if (isBlacklisted(interaction.user.id)) {
+    await interaction.reply({ content: 'You are blacklisted and cannot reserve preorder spots.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
   const preorderId = parseInt(interaction.customId.split(':')[1], 10);
   const preorder = getPreorder(preorderId);
   if (!preorder || preorder.status !== 'open') {
@@ -559,6 +567,13 @@ async function handlePreorderClaim(interaction) {
 
 async function handleGiveawayEnter(interaction) {
   if (!interaction.isButton() || !interaction.customId.startsWith('giveaway_enter:')) return false;
+
+  // Blacklist guard
+  if (isBlacklisted(interaction.user.id)) {
+    await interaction.reply({ content: 'You are blacklisted and cannot enter giveaways.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
   const giveawayId = parseInt(interaction.customId.split(':')[1], 10);
   const giveaway = getGiveaway(giveawayId);
   if (!giveaway) {

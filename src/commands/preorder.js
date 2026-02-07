@@ -28,6 +28,7 @@ import {
   formatSpotsText,
   buildPreorderEmbed,
 } from '../services/preorder.js';
+import { createTicketForGame } from '../services/ticket.js';
 import { config } from '../config.js';
 import {
   logPreorderCreated,
@@ -403,17 +404,53 @@ export async function execute(interaction) {
     }
 
     fulfillPreorder(id);
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     // Update forum post to show fulfilled status
     await updateForumPost(interaction.client, preorder, id);
 
-    // DM all verified users
+    // Open tickets for verified users if app_id is set
+    let ticketsOpened = 0;
     let dmSuccess = 0;
     const unverified = claims.filter((c) => c.verified !== 1);
+
     for (const claim of verified) {
       try {
+        if (preorder.game_app_id) {
+          // Create a real activation ticket for each verified user
+          const member = await interaction.guild.members.fetch(claim.user_id).catch(() => null);
+          if (member) {
+            const fakeInteraction = {
+              user: member.user,
+              member,
+              guildId: interaction.guildId,
+              guild: interaction.guild,
+              client: interaction.client,
+            };
+            const result = await createTicketForGame(fakeInteraction, preorder.game_app_id, { requireTicketCategory: false });
+            if (result.ok) {
+              ticketsOpened++;
+              // Notify the ticket about its preorder origin
+              if (result.channel) {
+                await result.channel.send({
+                  embeds: [
+                    new EmbedBuilder()
+                      .setColor(0xe91e63)
+                      .setDescription(`🛒 This ticket was opened from **Preorder #${id}** (${preorder.game_name}). Ko-fi donation verified.`)
+                      .setTimestamp(),
+                  ],
+                }).catch(() => {});
+              }
+            }
+          }
+        }
+
+        // DM user regardless
         const user = await interaction.client.users.fetch(claim.user_id).catch(() => null);
         if (user) {
+          const ticketNote = ticketsOpened > 0
+            ? 'A ticket has been opened for you — check the server for your activation channel.'
+            : 'An activator will contact you shortly to complete your activation.';
           await user.send({
             embeds: [
               new EmbedBuilder()
@@ -423,7 +460,7 @@ export async function execute(interaction) {
                   [
                     `Your preorder **#${id}** for **${preorder.game_name}** has been fulfilled!`,
                     '',
-                    'An activator will contact you shortly to complete your activation.',
+                    ticketNote,
                     'Please be ready to provide your Steam credentials when asked.',
                   ].join('\n')
                 )
@@ -471,8 +508,9 @@ export async function execute(interaction) {
                 .setDescription(
                   [
                     `This preorder has been fulfilled! **${verified.length}** verified users have been notified.`,
-                    unverified.length > 0 ? `\n⚠️ **${unverified.length}** user(s) had unverified spots and missed out.` : '',
-                  ].join('')
+                    ticketsOpened > 0 ? `🎫 **${ticketsOpened}** activation tickets opened automatically.` : '',
+                    unverified.length > 0 ? `⚠️ **${unverified.length}** user(s) had unverified spots and missed out.` : '',
+                  ].filter(Boolean).join('\n')
                 )
                 .setTimestamp(),
             ],
@@ -488,12 +526,13 @@ export async function execute(interaction) {
         [
           `Preorder **#${id}** (${preorder.game_name})`,
           `✅ DM'd **${dmSuccess}/${verified.length}** verified users`,
+          ticketsOpened > 0 ? `🎫 Opened **${ticketsOpened}** activation tickets` : '💡 No app ID set — tickets not auto-opened (DMs sent instead)',
           unverified.length > 0 ? `⚠️ **${unverified.length}** unverified users notified they missed out` : '',
         ].filter(Boolean).join('\n')
       )
       .setTimestamp();
 
-    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ embeds: [embed] });
 
     logPreorderStatus({
       preorderId: id,
