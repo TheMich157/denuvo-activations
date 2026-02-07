@@ -100,7 +100,8 @@ export function getActivatorsForGame(gameAppId, excludeOverLimit = true) {
 
 /**
  * Pick the best available activator for a game.
- * Scoring: not away (+10), higher rating (+avg), more stock (+1 per 5 stock), automated method (+2).
+ * Away activators are excluded entirely — they should never be auto-assigned.
+ * Scoring: higher rating (+avg), more stock (+1 per 5 stock), automated method (+2), fewer daily activations.
  * @param {number} gameAppId
  * @returns {{ activator_id: string; score: number } | null}
  */
@@ -108,10 +109,12 @@ export function getBestActivator(gameAppId) {
   const activators = getActivatorsForGame(gameAppId, true);
   if (activators.length === 0) return null;
 
-  const scored = activators.map((a) => {
+  // Filter out away activators — they opted out of auto-assignment
+  const available = activators.filter((a) => !isAway(a.activator_id));
+  if (available.length === 0) return null;
+
+  const scored = available.map((a) => {
     let score = 0;
-    // Prefer not-away
-    if (!isAway(a.activator_id)) score += 10;
     // Rating bonus
     const ratingRow = db.prepare(
       'SELECT AVG(rating) AS avg FROM activator_ratings WHERE activator_id = ?'

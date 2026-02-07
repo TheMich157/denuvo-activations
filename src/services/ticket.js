@@ -148,8 +148,11 @@ import {
     );
   
   const availableActivators = activators.filter((a) => !isAway(a.activator_id));
-  const activatorMentions = (availableActivators.length > 0 ? availableActivators : activators)
-    .map((a) => `<@${a.activator_id}>`).join(' ');
+  // Only mention non-away activators — away activators opted out of pings.
+  // They still have channel access via the role and will see tickets when back.
+  const activatorMentions = availableActivators.length > 0
+    ? availableActivators.map((a) => `<@${a.activator_id}>`).join(' ')
+    : '*(all activators are currently away)*';
   const ticketRef = `#${requestId.slice(0, 8).toUpperCase()}`;
 
   // Try auto-assign best activator
@@ -327,8 +330,9 @@ export function buildTicketRecoveryPayload(req) {
 
   const activators = getActivatorsForGame(req.game_app_id);
   const availableActivators = activators.filter((a) => !isAway(a.activator_id));
-  const activatorMentions = (availableActivators.length > 0 ? availableActivators : activators)
-    .map((a) => `<@${a.activator_id}>`).join(' ') || '—';
+  const activatorMentions = availableActivators.length > 0
+    ? availableActivators.map((a) => `<@${a.activator_id}>`).join(' ')
+    : '*(all activators are currently away)*';
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(`🎮 Activation Request: ${gameName}`)
