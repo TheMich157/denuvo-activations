@@ -99,6 +99,7 @@ export const data = new SlashCommandBuilder()
       .addIntegerOption((o) => o.setName('id').setDescription('Preorder ID').setRequired(true))
       .addNumberOption((o) => o.setName('price').setDescription('New price ($)').setRequired(false))
       .addIntegerOption((o) => o.setName('spots').setDescription('New max spots').setRequired(false))
+      .addIntegerOption((o) => o.setName('appid').setDescription('Steam App ID').setRequired(false))
       .addStringOption((o) => o.setName('description').setDescription('New description').setRequired(false))
   )
   .addSubcommand((sub) =>
@@ -395,9 +396,13 @@ export async function execute(interaction) {
     if (!preorder) {
       return interaction.reply({ content: `Preorder **#${id}** not found.`, flags: MessageFlags.Ephemeral });
     }
+    if (!preorder.game_app_id) {
+      return interaction.reply({ content: `Preorder **#${id}** has no App ID set — cannot open tickets. Use \`/preorder edit ${id}\` to add one first, or recreate the preorder with an App ID.`, flags: MessageFlags.Ephemeral });
+    }
 
     const claims = getClaimsForPreorder(id);
     const verified = claims.filter((c) => c.verified === 1);
+    const unverified = claims.filter((c) => c.verified !== 1);
 
     if (verified.length === 0) {
       return interaction.reply({ content: `No verified users for preorder **#${id}**. Nothing to fulfill.`, flags: MessageFlags.Ephemeral });
@@ -407,70 +412,51 @@ export async function execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     // Update forum post to show fulfilled status
-    await updateForumPost(interaction.client, preorder, id);
+    await updateForumPost(interaction.client, { ...preorder, status: 'fulfilled' }, id);
 
-    // Open tickets for verified users if app_id is set
+    // Open a ticket for every verified user — same as a normal activation
     let ticketsOpened = 0;
-    let dmSuccess = 0;
-    const unverified = claims.filter((c) => c.verified !== 1);
+    let ticketsFailed = 0;
 
     for (const claim of verified) {
       try {
-        if (preorder.game_app_id) {
-          // Create a real activation ticket for each verified user
-          const member = await interaction.guild.members.fetch(claim.user_id).catch(() => null);
-          if (member) {
-            const fakeInteraction = {
-              user: member.user,
-              member,
-              guildId: interaction.guildId,
-              guild: interaction.guild,
-              client: interaction.client,
-            };
-            const result = await createTicketForGame(fakeInteraction, preorder.game_app_id, { requireTicketCategory: false });
-            if (result.ok) {
-              ticketsOpened++;
-              // Notify the ticket about its preorder origin
-              if (result.channel) {
-                await result.channel.send({
-                  embeds: [
-                    new EmbedBuilder()
-                      .setColor(0xe91e63)
-                      .setDescription(`🛒 This ticket was opened from **Preorder #${id}** (${preorder.game_name}). Ko-fi donation verified.`)
-                      .setTimestamp(),
-                  ],
-                }).catch(() => {});
-              }
-            }
-          }
-        }
+        const member = await interaction.guild.members.fetch(claim.user_id).catch(() => null);
+        if (!member) { ticketsFailed++; continue; }
 
-        // DM user regardless
-        const user = await interaction.client.users.fetch(claim.user_id).catch(() => null);
-        if (user) {
-          const ticketNote = ticketsOpened > 0
-            ? 'A ticket has been opened for you — check the server for your activation channel.'
-            : 'An activator will contact you shortly to complete your activation.';
-          await user.send({
+        const fakeInteraction = {
+          user: member.user,
+          member,
+          guildId: interaction.guildId,
+          guild: interaction.guild,
+          client: interaction.client,
+        };
+        const result = await createTicketForGame(fakeInteraction, preorder.game_app_id, { requireTicketCategory: false, preorder: true });
+        if (result.ok && result.channel) {
+          ticketsOpened++;
+          // Tag the ticket as a preorder fulfillment
+          await result.channel.send({
             embeds: [
               new EmbedBuilder()
-                .setColor(0x57f287)
-                .setTitle('🎉 Preorder Fulfilled!')
+                .setColor(0xe91e63)
+                .setTitle('🛒 Preorder Fulfillment')
                 .setDescription(
                   [
-                    `Your preorder **#${id}** for **${preorder.game_name}** has been fulfilled!`,
+                    `This ticket was created from **Preorder #${id}** — **${preorder.game_name}**.`,
+                    `Ko-fi donation **verified** — proceed with activation as normal.`,
                     '',
-                    ticketNote,
-                    'Please be ready to provide your Steam credentials when asked.',
+                    `> Preorder created by <@${preorder.created_by}>`,
                   ].join('\n')
                 )
                 .setFooter({ text: `Preorder #${id}` })
                 .setTimestamp(),
             ],
           }).catch(() => {});
-          dmSuccess++;
+        } else {
+          ticketsFailed++;
         }
-      } catch {}
+      } catch {
+        ticketsFailed++;
+      }
     }
 
     // DM unverified users that they missed out
@@ -507,8 +493,9 @@ export async function execute(interaction) {
                 .setTitle('✅ Preorder Fulfilled!')
                 .setDescription(
                   [
-                    `This preorder has been fulfilled! **${verified.length}** verified users have been notified.`,
-                    ticketsOpened > 0 ? `🎫 **${ticketsOpened}** activation tickets opened automatically.` : '',
+                    `This preorder has been fulfilled!`,
+                    `🎫 **${ticketsOpened}** activation tickets opened for verified users.`,
+                    ticketsFailed > 0 ? `⚠️ **${ticketsFailed}** ticket(s) could not be opened (user may have left).` : '',
                     unverified.length > 0 ? `⚠️ **${unverified.length}** user(s) had unverified spots and missed out.` : '',
                   ].filter(Boolean).join('\n')
                 )
@@ -525,8 +512,8 @@ export async function execute(interaction) {
       .setDescription(
         [
           `Preorder **#${id}** (${preorder.game_name})`,
-          `✅ DM'd **${dmSuccess}/${verified.length}** verified users`,
-          ticketsOpened > 0 ? `🎫 Opened **${ticketsOpened}** activation tickets` : '💡 No app ID set — tickets not auto-opened (DMs sent instead)',
+          `🎫 Opened **${ticketsOpened}/${verified.length}** activation tickets`,
+          ticketsFailed > 0 ? `⚠️ **${ticketsFailed}** failed (user left server or error)` : '',
           unverified.length > 0 ? `⚠️ **${unverified.length}** unverified users notified they missed out` : '',
         ].filter(Boolean).join('\n')
       )
@@ -704,10 +691,11 @@ export async function execute(interaction) {
 
     const newPrice = interaction.options.getNumber('price');
     const newSpots = interaction.options.getInteger('spots');
+    const newAppId = interaction.options.getInteger('appid');
     const newDesc = interaction.options.getString('description');
 
-    if (newPrice === null && newSpots === null && newDesc === null) {
-      return interaction.reply({ content: 'Provide at least one field to edit (price, spots, or description).', flags: MessageFlags.Ephemeral });
+    if (newPrice === null && newSpots === null && newAppId === null && newDesc === null) {
+      return interaction.reply({ content: 'Provide at least one field to edit (price, spots, appid, or description).', flags: MessageFlags.Ephemeral });
     }
 
     if (newPrice !== null && newPrice < 1) {
@@ -720,6 +708,7 @@ export async function execute(interaction) {
     updatePreorder(id, {
       price: newPrice ?? undefined,
       maxSpots: newSpots ?? undefined,
+      appId: newAppId ?? undefined,
       description: newDesc ?? undefined,
     });
 
@@ -730,6 +719,7 @@ export async function execute(interaction) {
     const changes = [];
     if (newPrice !== null) changes.push(`💰 Price → **$${newPrice.toFixed(2)}**`);
     if (newSpots !== null) changes.push(`🎟️ Max spots → **${newSpots || 'Unlimited'}**`);
+    if (newAppId !== null) changes.push(`🎮 App ID → **${newAppId}**`);
     if (newDesc !== null) changes.push(`📝 Description updated`);
 
     const embed = new EmbedBuilder()

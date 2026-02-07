@@ -72,11 +72,12 @@ export function refillPreorder(preorderId, newMaxSpots = null) {
 /**
  * Update editable fields on a preorder (price, max_spots, description).
  */
-export function updatePreorder(preorderId, { price, maxSpots, description } = {}) {
+export function updatePreorder(preorderId, { price, maxSpots, appId, description } = {}) {
   const sets = [];
   const params = [];
   if (price !== undefined) { sets.push('price = ?'); params.push(price); }
   if (maxSpots !== undefined) { sets.push('max_spots = ?'); params.push(maxSpots); }
+  if (appId !== undefined) { sets.push('game_app_id = ?'); params.push(appId); }
   if (description !== undefined) { sets.push('description = ?'); params.push(description); }
   if (sets.length === 0) return false;
   params.push(preorderId);

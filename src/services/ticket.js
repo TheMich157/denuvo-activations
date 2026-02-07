@@ -23,7 +23,7 @@ import {
   import { db } from '../db/index.js';
   
   export async function createTicketForGame(interaction, appId, options = {}) {
-    const { requireTicketCategory = false } = options;
+    const { requireTicketCategory = false, preorder = false } = options;
   
     if (!isValidAppId(appId)) return { ok: false, error: 'Invalid game ID.' };
     const game = getGameByAppId(appId);
@@ -35,13 +35,14 @@ import {
       return { ok: false, error: 'Ticket category not configured. Set TICKET_CATEGORY_ID for the panel.' };
     }
 
-    // Blacklist check — silently block
-    if (isBlacklisted(interaction.user.id)) {
+    // Blacklist check — skip for preorder (already paid & verified)
+    if (!preorder && isBlacklisted(interaction.user.id)) {
       return { ok: false, error: 'You are not able to make requests. Contact an admin if you believe this is a mistake.' };
     }
   
     const activators = getActivatorsForGame(appId);
-    if (activators.length === 0) {
+    // Skip stock/waitlist check for preorders — they already paid
+    if (!preorder && activators.length === 0) {
       // Offer waitlist
       if (!isOnWaitlist(interaction.user.id, appId)) {
         joinWaitlist(interaction.user.id, appId);
@@ -50,39 +51,42 @@ import {
       return { ok: false, error: `**${getGameDisplayName(game)}** is out of stock. You're already on the waitlist — we'll DM you when it's available.` };
     }
   
-    const cooldownUntil = isActivator(interaction.member) ? null : checkCooldown(interaction.user.id, game.appId);
+    // Skip cooldown for preorders — donation already verified
     const tierInfo = getUserTierInfo(interaction.user.id);
     let usedSkipToken = false;
-    if (cooldownUntil) {
-      // Check for skip token first
-      const hasSkipToken = getTokens(interaction.user.id) > 0;
-      if (hasSkipToken) {
-        useToken(interaction.user.id);
-        usedSkipToken = true;
-        // Skip the cooldown entirely
-      } else if (tierInfo.tier !== 'none') {
-        // Tier members get reduced cooldown
-        const baseCd = getCooldownHours(game.appId);
-        const adjustedCd = getAdjustedCooldown(baseCd, interaction.user.id);
-        const adjustedEnd = Date.now() - ((baseCd - adjustedCd) * 3600000);
-        if (cooldownUntil > adjustedEnd) {
-          const mins = Math.ceil((cooldownUntil - (baseCd - adjustedCd) * 3600000 - Date.now()) / 60000);
-          if (mins > 0) {
-            return {
-              ok: false,
-              error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${adjustedCd}h — ${TIERS[tierInfo.tier].emoji} tier benefit).`,
-            };
+    if (!preorder) {
+      const cooldownUntil = isActivator(interaction.member) ? null : checkCooldown(interaction.user.id, game.appId);
+      if (cooldownUntil) {
+        // Check for skip token first
+        const hasSkipToken = getTokens(interaction.user.id) > 0;
+        if (hasSkipToken) {
+          useToken(interaction.user.id);
+          usedSkipToken = true;
+          // Skip the cooldown entirely
+        } else if (tierInfo.tier !== 'none') {
+          // Tier members get reduced cooldown
+          const baseCd = getCooldownHours(game.appId);
+          const adjustedCd = getAdjustedCooldown(baseCd, interaction.user.id);
+          const adjustedEnd = Date.now() - ((baseCd - adjustedCd) * 3600000);
+          if (cooldownUntil > adjustedEnd) {
+            const mins = Math.ceil((cooldownUntil - (baseCd - adjustedCd) * 3600000 - Date.now()) / 60000);
+            if (mins > 0) {
+              return {
+                ok: false,
+                error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${adjustedCd}h — ${TIERS[tierInfo.tier].emoji} tier benefit).`,
+              };
+            }
           }
+          // If adjusted cooldown has passed, allow through
+        } else {
+          const mins = Math.ceil((cooldownUntil - Date.now()) / 60000);
+          const hoursLabel = getCooldownHours(game.appId) === 48 ? '48 hours (high demand)' : '24 hours';
+          const tokenHint = `\n> 💡 Buy a **skip token** with \`/skiptoken buy\` to bypass cooldowns!`;
+          return {
+            ok: false,
+            error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${hoursLabel}).${tokenHint}`,
+          };
         }
-        // If adjusted cooldown has passed, allow through
-      } else {
-        const mins = Math.ceil((cooldownUntil - Date.now()) / 60000);
-        const hoursLabel = getCooldownHours(game.appId) === 48 ? '48 hours (high demand)' : '24 hours';
-        const tokenHint = `\n> 💡 Buy a **skip token** with \`/skiptoken buy\` to bypass cooldowns!`;
-        return {
-          ok: false,
-          error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${hoursLabel}).${tokenHint}`,
-        };
       }
     }
   
