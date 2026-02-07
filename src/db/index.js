@@ -175,6 +175,9 @@ export async function initDb() {
     sqlDb.exec('ALTER TABLE requests ADD COLUMN screenshot_verified INTEGER DEFAULT 0');
   } catch {}
   try {
+    sqlDb.exec(`ALTER TABLE requests ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))`);
+  } catch {}
+  try {
     sqlDb.exec(`
       CREATE TABLE IF NOT EXISTS activation_cooldowns (
         buyer_id TEXT NOT NULL,

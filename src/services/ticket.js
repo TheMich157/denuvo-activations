@@ -39,6 +39,16 @@ import {
     if (!preorder && isBlacklisted(interaction.user.id)) {
       return { ok: false, error: 'You are not able to make requests. Contact an admin if you believe this is a mistake.' };
     }
+
+    // Duplicate ticket guard — one open ticket at a time (skip for preorders)
+    if (!preorder) {
+      const existingTicket = db.prepare(
+        `SELECT id, game_name FROM requests WHERE buyer_id = ? AND status IN ('pending', 'in_progress') LIMIT 1`
+      ).get(interaction.user.id);
+      if (existingTicket) {
+        return { ok: false, error: `You already have an open ticket for **${existingTicket.game_name}**. Complete or close it before opening another.` };
+      }
+    }
   
     const activators = getActivatorsForGame(appId);
     // Skip stock/waitlist check for preorders — they already paid

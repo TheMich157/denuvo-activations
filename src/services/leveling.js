@@ -45,14 +45,17 @@ export function getLeaderboard(limit = 10) {
 
 /**
  * Get a user's rank position (1-based) on the leaderboard.
+ * Uses a SQL COUNT to avoid loading all rows into memory.
  */
 export function getUserRank(userId) {
-  const all = db.prepare(`
-    SELECT user_id FROM user_levels
-    ORDER BY level DESC, xp DESC
-  `).all();
-  const index = all.findIndex(r => r.user_id === String(userId));
-  return index === -1 ? null : index + 1;
+  const uid = String(userId);
+  const user = db.prepare('SELECT level, xp FROM user_levels WHERE user_id = ?').get(uid);
+  if (!user) return null;
+  const row = db.prepare(`
+    SELECT COUNT(*) + 1 AS rank FROM user_levels
+    WHERE (level > ? OR (level = ? AND xp > ?))
+  `).get(user.level, user.level, user.xp);
+  return row?.rank ?? null;
 }
 
 /**

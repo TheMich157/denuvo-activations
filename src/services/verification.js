@@ -95,10 +95,10 @@ const QUESTIONS = [
   },
   {
     id: 'q_ownership',
-    question: 'Do you need to legitimately own the game on Steam?',
+    question: 'Do you need to legitimately own the game on Steam to use our service?',
     options: [
-      { label: 'No, any account works', value: 'wrong_1' },
-      { label: 'Yes, you must own the game', value: 'correct' },
+      { label: 'Yes, you must own the game', value: 'wrong_1' },
+      { label: 'No, you don\'t need to own the game', value: 'correct' },
       { label: 'Only for preorders', value: 'wrong_2' },
       { label: 'Only for high-tier games', value: 'wrong_3' },
     ],

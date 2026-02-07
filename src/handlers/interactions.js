@@ -170,7 +170,13 @@ async function handleAutoCodeModal(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     const code = await generateAuthCode(req.game_app_id, credentials, twoFactorCode);
-    await completeAndNotifyTicket(req, code, interaction.client);
+    const result = await completeAndNotifyTicket(req, code, interaction.client);
+    if (result === 'screenshot_not_verified') {
+      await interaction.editReply({
+        content: '❌ **Cannot complete** — the buyer\'s screenshot has not been verified yet. Verify it first, then try again.',
+      });
+      return true;
+    }
     await interaction.editReply({
       content: `✅ **Code generated and sent to the ticket.** **${req.points_charged}** points transferred to you.`,
     });

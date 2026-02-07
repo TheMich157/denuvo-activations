@@ -31,6 +31,7 @@ const VALIDITY_MINUTES = 30;
  */
 export async function completeAndNotifyTicket(req, authCode, client) {
   const completed = completeRequest(req.id, authCode);
+  if (completed === 'screenshot_not_verified') return 'screenshot_not_verified';
   if (!completed) return false;
   const updated = getRequest(req.id);
   if (updated) await logActivation(updated);
@@ -187,7 +188,14 @@ export async function handleModal(interaction) {
     return true;
   }
 
-  await completeAndNotifyTicket(req, authCode, interaction.client);
+  const result = await completeAndNotifyTicket(req, authCode, interaction.client);
+  if (result === 'screenshot_not_verified') {
+    await interaction.reply({
+      content: '❌ **Cannot complete** — the buyer\'s screenshot has not been verified yet. Verify it first (or approve manually), then try again.',
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
 
   await interaction.reply({
     content: `✅ **Activation completed.** Auth code sent to ticket. **${req.points_charged}** points transferred to you.`,

@@ -7,10 +7,10 @@ import { config, validateConfig } from './src/config.js';
 import { initDb } from './src/db/index.js';
 import { handleMessage } from './src/handlers/messages.js';
 import { canUseCommand } from './src/utils/whitelist.js';
-import { startTicketAutoClose } from './src/services/ticketAutoClose.js';
+import { startTicketAutoClose, stopTicketAutoClose } from './src/services/ticketAutoClose.js';
 import { setClient as setActivationLogClient } from './src/services/activationLog.js';
-import { startStockRestock } from './src/services/stockRestock.js';
-import { startDailyDigest } from './src/services/dailyDigest.js';
+import { startStockRestock, stopStockRestock } from './src/services/stockRestock.js';
+import { startDailyDigest, stopDailyDigest } from './src/services/dailyDigest.js';
 import { syncPanelMessage, setPanelClient } from './src/services/panel.js';
 import { buildPanelMessagePayload } from './src/commands/ticketpanel.js';
 import { startBackupService } from './src/services/backup.js';
@@ -207,6 +207,18 @@ process.on('uncaughtException', (err) => {
 client.on('error', (err) => {
   console.error('[Discord] Client error:', err);
 });
+
+// Graceful shutdown — stop all schedulers and destroy client
+function gracefulShutdown(signal) {
+  console.log(`[Shutdown] Received ${signal}, cleaning up...`);
+  stopTicketAutoClose();
+  stopStockRestock();
+  stopDailyDigest();
+  client.destroy();
+  console.log('[Shutdown] Cleanup complete.');
+}
+process.on('SIGINT', () => { gracefulShutdown('SIGINT'); });
+process.on('SIGTERM', () => { gracefulShutdown('SIGTERM'); });
 
 client.login(config.token).catch((err) => {
   console.error('Login failed:', err);

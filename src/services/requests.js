@@ -78,7 +78,7 @@ export function assignIssuer(requestId, issuerId) {
     const current = db.prepare('SELECT status FROM requests WHERE id = ?').get(requestId);
     if (!current || current.status !== 'pending') return false;
     db.prepare(`
-      UPDATE requests SET issuer_id = ?, status = 'in_progress', points_charged = ? WHERE id = ?
+      UPDATE requests SET issuer_id = ?, status = 'in_progress', points_charged = ?, updated_at = datetime('now') WHERE id = ?
     `).run(issuerId, points, requestId);
     return true;
   });
@@ -90,10 +90,11 @@ export function assignIssuer(requestId, issuerId) {
 export function completeRequest(requestId, authCode) {
   const req = getRequest(requestId);
   if (!req || req.status !== 'in_progress') return false;
+  if (!req.screenshot_verified) return 'screenshot_not_verified';
   const code = typeof authCode === 'string' ? authCode.trim() : String(authCode ?? '').trim();
   if (!code) return false;
   db.prepare(`
-    UPDATE requests SET status = 'completed', auth_code = ?, completed_at = datetime('now') WHERE id = ?
+    UPDATE requests SET status = 'completed', auth_code = ?, completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?
   `).run(code, requestId);
   addPoints(req.issuer_id, req.points_charged, 'activation_completed', requestId);
   const steamId = getCredentials(req.issuer_id, req.game_app_id)?.username ?? `manual_${req.issuer_id}_${req.game_app_id}`;
@@ -129,7 +130,7 @@ export function cancelRequest(requestId) {
   const req = getRequest(requestId);
   if (!req) return false;
   if (req.status === 'completed' || req.status === 'cancelled' || req.status === 'failed') return false;
-  db.prepare('UPDATE requests SET status = ? WHERE id = ?').run('cancelled', requestId);
+  db.prepare(`UPDATE requests SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?`).run(requestId);
   scheduleSave();
   return true;
 }
