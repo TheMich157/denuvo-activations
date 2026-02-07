@@ -32,6 +32,7 @@ export async function execute(interaction) {
       '**What do we need from you?**',
       '• Your **Steam Account** must own the game',
       '• **Windows Update Blocker (WUB)** must be active — updates disabled, red shield icon visible',
+      '• **SteamTools** installed (for manifest/depot management)',
       '• A **screenshot** proving both: game folder properties + WUB active',
       '• **Patience** — activators work through the queue in order (supporters get priority!)',
       '',
@@ -50,6 +51,7 @@ export async function execute(interaction) {
       '**Before you start — make sure you have:**',
       '✅ The game installed via Steam',
       '✅ Windows Update Blocker (WUB) downloaded & active',
+      '✅ **SteamTools** installed — [Download here](https://www.steamtools.net/)',
       '✅ Your screenshot ready (see requirements below)',
       '',
       '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
@@ -80,6 +82,8 @@ export async function execute(interaction) {
     ].join('\n'));
 
   // ─── 3. Required Tools & Downloads ───
+  const manifestChannelMention = '<#1469623406898184295>';
+
   const toolsEmbed = new EmbedBuilder()
     .setColor(0xe67e22)
     .setTitle('🔧 Required Tools & Links')
@@ -95,12 +99,33 @@ export async function execute(interaction) {
         inline: false,
       },
       {
+        name: '🔨 SteamTools',
+        value: [
+          'Required for managing Steam manifests and depot operations.',
+          '**Download:** [github.com/SteamTools-Team](https://github.com/BeyondDimension/SteamTools)',
+          '• Used alongside manifest files for activation',
+          '• Make sure to run it **as administrator**',
+          '• Ensure Steam is **closed** before running SteamTools',
+        ].join('\n'),
+        inline: false,
+      },
+      {
         name: '🌐 DRM Steam Run',
         value: [
           `The portal for manual auth code entry: **[drm.steam.run](${drmUrl})**`,
           '• Login with your Steam account',
           '• Enter your game\'s App ID',
           '• Copy the auth code from your ticket',
+        ].join('\n'),
+        inline: false,
+      },
+      {
+        name: '📦 Manifest Files',
+        value: [
+          `We offer **manifest files** through ${manifestChannelMention}.`,
+          '• Send a **Steam App ID** in that channel to download a manifest',
+          '• Use `<appid>` for manifest file or `<appid> lua` for Lua script',
+          '• Manifests are used with SteamTools for depot/game management',
         ].join('\n'),
         inline: false,
       },
@@ -299,8 +324,18 @@ export async function execute(interaction) {
         inline: false,
       },
       {
+        name: 'Where can I get manifest files?',
+        value: 'We offer manifest files through <#1469623406898184295>. Just send a Steam App ID in that channel and the bot will deliver the manifest. Use these with **SteamTools** for depot management.',
+        inline: false,
+      },
+      {
+        name: 'What is SteamTools and why do I need it?',
+        value: 'SteamTools is required for managing Steam manifests and depots. Download it from [GitHub](https://github.com/BeyondDimension/SteamTools) and run it as administrator with Steam closed.',
+        inline: false,
+      },
+      {
         name: 'How do I get verified to use the server?',
-        value: 'New members receive a **verification quiz** via DM when they join. Answer the questions correctly to gain access. This keeps the server safe from bots!',
+        value: 'New members receive a **verification quiz** when they join. Head to the verification channel, ping the bot, and answer the questions correctly to gain access. This keeps the server safe from bots!',
         inline: false,
       }
     );
@@ -323,6 +358,10 @@ export async function execute(interaction) {
       .setLabel('🛡️ Download WUB')
       .setStyle(ButtonStyle.Link)
       .setURL('https://www.sordum.org/9470/'),
+    new ButtonBuilder()
+      .setLabel('🔨 SteamTools')
+      .setStyle(ButtonStyle.Link)
+      .setURL('https://www.steamtools.net/'),
   );
 
   // Acknowledge silently so the slash command invocation is hidden

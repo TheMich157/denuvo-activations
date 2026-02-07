@@ -570,7 +570,11 @@ export async function handleMessage(message) {
           ].join('\n')
         )
         .setTimestamp();
-      await message.channel.send({ embeds: [embed] }).catch(() => {});
+      // Send in the same channel where they sent the message
+      await message.channel.send({
+        content: `🎉 **Level up!** <@${message.author.id}> reached **Level ${result.newLevel}** in this channel.`,
+        embeds: [embed],
+      }).catch((err) => console.error('[Leveling] Failed to send level-up message:', err?.message));
     }
   } catch (err) {
     console.error('[Leveling] XP error:', err.message);

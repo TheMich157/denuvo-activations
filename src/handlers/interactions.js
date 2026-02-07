@@ -33,6 +33,7 @@ import {
   logPreorderVerify,
   logPreorderReject,
   logPreorderStatus,
+  logFeedback,
 } from '../services/activationLog.js';
 import { getGiveaway, hasEntered, enterGiveaway, getEntryCount } from '../services/giveaway.js';
 import { submitFeedback, hasFeedback } from '../services/feedback.js';
@@ -628,7 +629,53 @@ async function handleFeedbackButton(interaction) {
   submitFeedback(requestId, interaction.user.id, rating);
 
   const stars = '⭐'.repeat(rating) + '☆'.repeat(5 - rating);
-  await interaction.reply({ content: `Thanks for your feedback! ${stars} (${rating}/5)`, flags: MessageFlags.Ephemeral });
+
+  // Update the DM embed to show the submitted rating (disable buttons)
+  const confirmedEmbed = new EmbedBuilder()
+    .setColor(rating >= 4 ? 0x57f287 : rating >= 2 ? 0xfee75c : 0xed4245)
+    .setTitle('📝 Feedback Submitted — Thank You!')
+    .setDescription(`You rated your experience: ${stars} **(${rating}/5)**\n\nYour feedback helps us improve the service!`)
+    .setFooter({ text: `Ticket #${requestId.slice(0, 8).toUpperCase()}` })
+    .setTimestamp();
+
+  await interaction.update({ embeds: [confirmedEmbed], components: [] }).catch(async () => {
+    // Fallback if update fails (e.g. message too old)
+    await interaction.reply({ content: `Thanks for your feedback! ${stars} (${rating}/5)`, flags: MessageFlags.Ephemeral }).catch(() => {});
+  });
+
+  // Log feedback to the log channel
+  const req = getRequest(requestId);
+  logFeedback({
+    requestId,
+    userId: interaction.user.id,
+    rating,
+    gameName: req?.game_name || null,
+    issuerId: req?.issuer_id || null,
+  }).catch(() => {});
+
+  // Also post to review channel if configured
+  if (config.reviewChannelId && req) {
+    try {
+      const reviewChannel = await interaction.client.channels.fetch(config.reviewChannelId).catch(() => null);
+      if (reviewChannel) {
+        const reviewEmbed = new EmbedBuilder()
+          .setColor(rating >= 4 ? 0x57f287 : rating >= 2 ? 0xfee75c : 0xed4245)
+          .setAuthor({
+            name: `Feedback by ${interaction.user.displayName || interaction.user.username}`,
+            iconURL: interaction.user.displayAvatarURL({ size: 64 }),
+          })
+          .setTitle(`${stars}  (${rating}/5)`)
+          .addFields(
+            { name: '🎮 Game', value: req.game_name || '—', inline: true },
+            { name: '🛠️ Activator', value: req.issuer_id ? `<@${req.issuer_id}>` : '—', inline: true },
+          )
+          .setFooter({ text: `Ticket #${requestId.slice(0, 8).toUpperCase()} • DM Feedback` })
+          .setTimestamp();
+        await reviewChannel.send({ embeds: [reviewEmbed] });
+      }
+    } catch {}
+  }
+
   return true;
 }
 

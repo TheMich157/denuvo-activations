@@ -257,6 +257,34 @@ export async function logPreorderStatus({ preorderId, gameName, action, actor, s
 }
 
 /**
+ * Log ticket feedback (DM survey response).
+ * @param {Object} opts
+ * @param {string} opts.requestId
+ * @param {string} opts.userId - The buyer who left feedback
+ * @param {number} opts.rating - 1–5 stars
+ * @param {string} opts.gameName
+ * @param {string|null} opts.issuerId - The activator who handled the ticket
+ */
+export async function logFeedback({ requestId, userId, rating, gameName, issuerId }) {
+  const stars = '⭐'.repeat(rating) + '☆'.repeat(5 - rating);
+  const color = rating >= 4 ? 0x57f287 : rating >= 2 ? 0xfee75c : 0xed4245;
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle('📝 Ticket Feedback Received')
+    .setDescription(`${stars}  **(${rating}/5)**`)
+    .addFields(
+      { name: 'Ticket', value: `\`#${(requestId || '').slice(0, 8).toUpperCase()}\``, inline: true },
+      { name: 'Game', value: gameName || '—', inline: true },
+      { name: 'Rating', value: `**${rating}**/5`, inline: true },
+      { name: 'From', value: `<@${userId}>`, inline: true },
+      { name: 'Activator', value: issuerId ? `<@${issuerId}>` : '—', inline: true },
+    )
+    .setFooter({ text: `Feedback • Ticket #${(requestId || '').slice(0, 8).toUpperCase()}` })
+    .setTimestamp();
+  await sendToLogChannel(embed);
+}
+
+/**
  * Log a batch of automatic restocks (one embed per run).
  * @param {{ activatorId: string; gameAppId: number; gameName: string }[]} entries
  */

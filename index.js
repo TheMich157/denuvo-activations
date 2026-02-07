@@ -102,70 +102,99 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.on(Events.MessageCreate, handleMessage);
 
 client.on(Events.GuildMemberAdd, async (member) => {
-  if (member.user.bot) return;
+  if (member.user?.bot) return;
   const { EmbedBuilder } = await import('discord.js');
 
-  // Auto-assign unverified role on join
-  if (config.unverifiedRoleId) {
-    try {
-      await member.roles.add(config.unverifiedRoleId);
-      console.log(`[Verify] Assigned unverified role to ${member.user.tag}`);
-    } catch (err) {
-      console.error(`[Verify] Failed to assign unverified role to ${member.user.tag}:`, err.message);
-    }
-  }
-
-  // Welcome message in the welcome channel
+  // Welcome message: prefer dedicated welcome channel, fallback to verify channel
   const welcomeChId = config.welcomeChannelId || config.verifyChannelId;
-  if (welcomeChId) {
+
+  // Fire both role assignment and welcome message concurrently for instant delivery
+  const rolePromise = (async () => {
+    if (config.unverifiedRoleId) {
+      try {
+        await member.roles.add(config.unverifiedRoleId);
+        console.log(`[Verify] Assigned unverified role to ${member.user.tag}`);
+      } catch (err) {
+        console.error(`[Verify] Failed to assign unverified role to ${member.user.tag}:`, err.message);
+      }
+    }
+  })();
+
+  const welcomePromise = (async () => {
+    if (!welcomeChId) return;
     try {
       const channel = await member.client.channels.fetch(welcomeChId).catch(() => null);
-      if (channel) {
-        const memberCount = member.guild.memberCount;
-        const verifyMention = config.verifyChannelId ? `<#${config.verifyChannelId}>` : 'the verification channel';
-        const embed = new EmbedBuilder()
-          .setColor(0x57f287)
-          .setAuthor({ name: member.user.tag, iconURL: member.user.displayAvatarURL({ size: 128 }) })
-          .setTitle('Welcome to DenuBrew!')
-          .setDescription(
-            [
-              `Hey <@${member.id}>, welcome to **DenuBrew**! You are member **#${memberCount}**.`,
-              '',
-              `Head over to ${verifyMention} and ping the bot to complete your **verification quiz** and unlock the server.`,
-              '',
-              '**What we do:**',
-              'We provide free Denuvo DRM activation tokens for your legitimately owned Steam games.',
-              '',
-              'Once verified, use the **activation panel** to request a game activation!',
-            ].join('\n')
-          )
-          .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
-          .setFooter({ text: `Member #${memberCount} \u2022 DenuBrew` })
-          .setTimestamp();
+      if (!channel) return;
 
-        await channel.send({ content: `<@${member.id}>`, embeds: [embed] });
-      }
-    } catch {}
-  }
+      const memberCount = member.guild.memberCount;
+      const verifyChannelMention = config.verifyChannelId ? `<#${config.verifyChannelId}>` : null;
+      const manifestChannelMention = '<#1469623406898184295>';
+      const verifyInstruction = verifyChannelMention
+        ? `Head to ${verifyChannelMention} and ping the bot to start the verification quiz.`
+        : 'Complete the verification quiz in the verification channel to unlock the server.';
+
+      const embed = new EmbedBuilder()
+        .setColor(0x57f287)
+        .setAuthor({ name: member.user.tag, iconURL: member.user.displayAvatarURL({ size: 128 }) })
+        .setTitle('Welcome to DenuBrew!')
+        .setDescription(
+          [
+            `Hey <@${member.id}>, welcome! You're member **#${memberCount}**.`,
+            '',
+            `**🔓 Verify to unlock:** ${verifyInstruction}`,
+            '',
+            'We provide **free Denuvo activation tokens** for your Steam games. Once verified, use the activation panel to request a game.',
+            '',
+            `**📦 Manifest files:** We also offer manifest files through ${manifestChannelMention} — just send a Steam App ID!`,
+          ].join('\n')
+        )
+        .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+        .setFooter({ text: `Member #${memberCount} • DenuBrew` })
+        .setTimestamp();
+
+      await channel.send({ content: `<@${member.id}>`, embeds: [embed] });
+    } catch (err) {
+      console.error('[Welcome] Failed to send join message:', err?.message);
+    }
+  })();
+
+  await Promise.all([rolePromise, welcomePromise]);
 });
 
 client.on(Events.GuildMemberRemove, async (member) => {
-  if (member.user.bot) return;
+  if (member.user?.bot) return;
+  const { EmbedBuilder } = await import('discord.js');
+
   const welcomeChId = config.welcomeChannelId || config.verifyChannelId;
   if (!welcomeChId) return;
+
+  // Fetch channel immediately — don't block on user resolution
+  const channel = await member.client.channels.fetch(welcomeChId).catch(() => null);
+  if (!channel) return;
+
+  // Handle partial member (user might be missing if not cached)
+  let user = member.user;
+  if (!user) {
+    try {
+      user = await member.client.users.fetch(member.id).catch(() => null);
+    } catch {}
+  }
+
   try {
-    const { EmbedBuilder } = await import('discord.js');
-    const channel = await member.client.channels.fetch(welcomeChId).catch(() => null);
-    if (channel) {
+    if (user) {
       const embed = new EmbedBuilder()
         .setColor(0xed4245)
-        .setAuthor({ name: member.user.tag, iconURL: member.user.displayAvatarURL({ size: 128 }) })
-        .setDescription(`**${member.user.tag}** has left the server. We now have **${member.guild.memberCount}** members.`)
+        .setAuthor({ name: user.tag, iconURL: user.displayAvatarURL({ size: 128 }) })
+        .setDescription(`**${user.tag}** left the server. We now have **${member.guild.memberCount}** members.`)
         .setFooter({ text: 'DenuBrew' })
         .setTimestamp();
       await channel.send({ embeds: [embed] });
+    } else {
+      await channel.send({ content: `A member left the server. We now have **${member.guild.memberCount}** members.` });
     }
-  } catch {}
+  } catch (err) {
+    console.error('[Leave] Failed to send leave message:', err?.message);
+  }
 });
 
 // Global error handlers to prevent crashes
