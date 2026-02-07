@@ -103,3 +103,52 @@ export async function logRequestFailed(req, reason = 'failed') {
     .setTimestamp();
   await sendToLogChannel(embed);
 }
+
+/**
+ * Log a restock event (manual add via /stock or /add, or automatic restock).
+ * @param {Object} opts
+ * @param {string} opts.activatorId - Discord user ID of the activator
+ * @param {number} opts.gameAppId
+ * @param {string} opts.gameName
+ * @param {number} opts.quantity - Number of slots added
+ * @param {'manual' | 'automatic'} opts.method
+ */
+export async function logRestock({ activatorId, gameAppId, gameName, quantity, method }) {
+  if (!activatorId || !gameAppId || quantity < 1) return;
+  const isAuto = method === 'automatic';
+  const embed = new EmbedBuilder()
+    .setColor(isAuto ? 0x3498db : 0x9b59b6)
+    .setTitle(isAuto ? '🔄 Automatic restock' : '📦 Manual restock')
+    .setDescription(
+      isAuto
+        ? `**${quantity}** slot(s) restocked automatically (after cooldown).`
+        : `**${quantity}** slot(s) added manually.`
+    )
+    .addFields(
+      { name: 'Game', value: `${gameName || '—'} (\`${gameAppId}\`)`, inline: true },
+      { name: 'Quantity', value: String(quantity), inline: true },
+      { name: 'Activator', value: `<@${activatorId}> (\`${activatorId}\`)`, inline: false },
+      { name: 'Method', value: isAuto ? 'Automatic (scheduled)' : 'Manual (/stock or /add)', inline: true }
+    )
+    .setTimestamp();
+  await sendToLogChannel(embed);
+}
+
+/**
+ * Log a batch of automatic restocks (one embed per run).
+ * @param {{ activatorId: string; gameAppId: number; gameName: string }[]} entries
+ */
+export async function logRestockBatch(entries) {
+  if (!entries?.length) return;
+  const lines = entries.slice(0, 25).map((e) =>
+    `• **${e.gameName || e.gameAppId}** — <@${e.activatorId}>`
+  );
+  const more = entries.length > 25 ? `\n*…and ${entries.length - 25} more*` : '';
+  const embed = new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle('🔄 Automatic restock run')
+    .setDescription(`**${entries.length}** slot(s) restocked.`)
+    .addFields({ name: 'Details', value: lines.join('\n') + more, inline: false })
+    .setTimestamp();
+  await sendToLogChannel(embed);
+}

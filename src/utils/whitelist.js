@@ -2,10 +2,12 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { isActivator } from './activator.js';
+import { ACTIVATOR_COMMANDS } from '../config/commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const ACTIVATOR_ONLY_COMMANDS = ['add', 'profile', 'balance', 'mylist', 'shop'];
+/** Commands only activators can use; whitelist users get profile, request, pricegame, shop, etc. */
+const ACTIVATOR_ONLY_COMMANDS = ACTIVATOR_COMMANDS;
 
 let cachedIds = null;
 

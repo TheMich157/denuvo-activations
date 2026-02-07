@@ -3,10 +3,10 @@ import { getActivatorsForGame, incrementDailyActivation, getCredentials, decreme
 import { addPoints } from './points.js';
 import { config } from '../config.js';
 import { isValidDiscordId, isValidRequestId, isValidAppId } from '../utils/validate.js';
+import { getCooldownHours } from '../utils/games.js';
 import crypto from 'crypto';
 
 const VALID_FAIL_REASONS = ['failed', 'cancelled', 'invalid_token'];
-const COOLDOWN_HOURS = 24;
 
 export function checkCooldown(buyerId, gameAppId) {
   if (!isValidDiscordId(buyerId) || !isValidAppId(gameAppId)) return null;
@@ -19,9 +19,20 @@ export function checkCooldown(buyerId, gameAppId) {
   return until;
 }
 
-export function setCooldown(buyerId, gameAppId, hours = COOLDOWN_HOURS) {
+/** @returns {{ game_app_id: number; cooldown_until: string }[]} */
+export function getCooldownsForUser(buyerId) {
+  if (!isValidDiscordId(buyerId)) return [];
+  return db.prepare(
+    `SELECT game_app_id, cooldown_until FROM activation_cooldowns
+     WHERE buyer_id = ? AND datetime(cooldown_until) > datetime('now')
+     ORDER BY cooldown_until ASC`
+  ).all(buyerId);
+}
+
+export function setCooldown(buyerId, gameAppId, hours = null) {
   if (!isValidDiscordId(buyerId) || !isValidAppId(gameAppId)) return;
-  const until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  const h = hours != null ? hours : getCooldownHours(gameAppId);
+  const until = new Date(Date.now() + h * 60 * 60 * 1000).toISOString();
   db.prepare(
     'INSERT OR REPLACE INTO activation_cooldowns (buyer_id, game_app_id, cooldown_until) VALUES (?, ?, ?)'
   ).run(buyerId, gameAppId, until);
@@ -79,14 +90,16 @@ export function assignIssuer(requestId, issuerId) {
 export function completeRequest(requestId, authCode) {
   const req = getRequest(requestId);
   if (!req || req.status !== 'in_progress') return false;
+  const code = typeof authCode === 'string' ? authCode.trim() : String(authCode ?? '').trim();
+  if (!code) return false;
   db.prepare(`
     UPDATE requests SET status = 'completed', auth_code = ?, completed_at = datetime('now') WHERE id = ?
-  `).run(authCode, requestId);
+  `).run(code, requestId);
   addPoints(req.issuer_id, req.points_charged, 'activation_completed', requestId);
   const steamId = getCredentials(req.issuer_id, req.game_app_id)?.username ?? `manual_${req.issuer_id}_${req.game_app_id}`;
   incrementDailyActivation(steamId);
   decrementActivatorStock(req.issuer_id, req.game_app_id);
-  setCooldown(req.buyer_id, req.game_app_id, COOLDOWN_HOURS);
+  setCooldown(req.buyer_id, req.game_app_id);
   scheduleSave();
   return true;
 }

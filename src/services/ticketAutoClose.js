@@ -4,6 +4,7 @@ import { clearState } from './screenshotVerify/state.js';
 import { ticketConfig } from '../config/ticket.js';
 import { logTicketAutoClosed } from './activationLog.js';
 import { debug } from '../utils/debug.js';
+import { getCooldownHours } from '../utils/games.js';
 
 const log = debug('ticketAutoClose');
 
@@ -13,9 +14,9 @@ let intervalId = null;
 export function startTicketAutoClose(client) {
   clientRef = client;
   if (intervalId) clearInterval(intervalId);
-  const { checkIntervalMs, verifyDeadlineMinutes, autoCloseCooldownHours } = ticketConfig;
+  const { checkIntervalMs, verifyDeadlineMinutes } = ticketConfig;
   intervalId = setInterval(runCheck, checkIntervalMs);
-  runCheck(verifyDeadlineMinutes, autoCloseCooldownHours).catch((err) => {
+  runCheck(verifyDeadlineMinutes).catch((err) => {
     log('First run check failed:', err?.message);
   });
 }
@@ -28,14 +29,15 @@ export function stopTicketAutoClose() {
   clientRef = null;
 }
 
-async function runCheck(deadlineMinutes = ticketConfig.verifyDeadlineMinutes, cooldownHours = ticketConfig.autoCloseCooldownHours) {
+async function runCheck(deadlineMinutes = ticketConfig.verifyDeadlineMinutes) {
   if (!clientRef) return;
   const toClose = getUnverifiedPendingOlderThan(deadlineMinutes);
   for (const req of toClose) {
     cancelRequest(req.id);
-    setCooldown(req.buyer_id, req.game_app_id, cooldownHours);
+    setCooldown(req.buyer_id, req.game_app_id);
     clearState(req.ticket_channel_id);
-    const msg = `⏱️ <@${req.buyer_id}> Your **${req.game_name}** ticket was closed: screenshot was not verified within ${deadlineMinutes} minutes. You can request this game again in 24 hours.`;
+    const cooldownH = getCooldownHours(req.game_app_id);
+    const msg = `⏱️ <@${req.buyer_id}> Your **${req.game_name}** ticket was closed: screenshot was not verified within ${deadlineMinutes} minutes. You can request this game again in **${cooldownH} hours**.`;
     const channel = await clientRef.channels.fetch(req.ticket_channel_id).catch((err) => {
       log('Fetch ticket channel failed:', req.ticket_channel_id, err?.message);
       return null;

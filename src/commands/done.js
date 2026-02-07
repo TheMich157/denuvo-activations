@@ -10,6 +10,8 @@ import {
 } from 'discord.js';
 import { completeRequest, getRequest, getPendingRequestForChannel } from '../services/requests.js';
 import { logActivation } from '../services/activationLog.js';
+import { sendCooldownDM } from '../services/cooldownDM.js';
+import { getCooldownHours, getGameByAppId, getGameDisplayName } from '../utils/games.js';
 
 const VALIDITY_MINUTES = 30;
 
@@ -26,6 +28,14 @@ export async function completeAndNotifyTicket(req, authCode, client) {
   if (!completed) return false;
   const updated = getRequest(req.id);
   if (updated) await logActivation(updated);
+
+  const hours = getCooldownHours(req.game_app_id);
+  const cooldownUntil = Date.now() + hours * 60 * 60 * 1000;
+  const game = getGameByAppId(req.game_app_id);
+  const gameName = game ? getGameDisplayName(game) : req.game_name;
+  if (client) {
+    sendCooldownDM(client, req.buyer_id, { gameName, cooldownUntil, hours }).catch(() => {});
+  }
 
   const ticketChannel = req.ticket_channel_id
     ? await client.channels.fetch(req.ticket_channel_id).catch(() => null)

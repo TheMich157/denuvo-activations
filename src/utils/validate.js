@@ -14,7 +14,8 @@ export function isValidRequestId(id) {
 }
 
 export function isValidAppId(id) {
-  const n = parseInt(id, 10);
+  if (id == null) return false;
+  const n = typeof id === 'number' ? id : parseInt(id, 10);
   return Number.isInteger(n) && n > 0 && n <= MAX_APP_ID;
 }
 

@@ -8,6 +8,7 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { buildStockSelectMenus, getStockCount, getChunkLabel, getGlobalStockStats, getRestockStats } from '../services/stock.js';
+import { getGameDisplayName, getGameByAppId } from '../utils/games.js';
 import { getPanel, setPanel, clearPanel } from '../services/panel.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
@@ -36,13 +37,16 @@ export function buildPanelComponents() {
   const rows = chunks.map((chunk, i) => {
     const options = chunk.map((g) => {
       const stock = getStockCount(g.appId);
-      const emoji = stock === 0 ? '🔴' : stock < LOW ? '🟡' : '🟢';
+      const gameWithDemand = getGameByAppId(g.appId) || g;
+      const highDemand = gameWithDemand.highDemand === true;
+      const emoji = highDemand ? '🔥' : (stock === 0 ? '🔴' : stock < LOW ? '🟡' : '🟢');
+      const displayName = getGameDisplayName(g);
       const maxLabelLen = 95;
-      const label = g.name.length > maxLabelLen ? g.name.slice(0, maxLabelLen - 3) + '...' : g.name;
+      const label = displayName.length > maxLabelLen ? displayName.slice(0, maxLabelLen - 3) + '...' : displayName;
       return {
         label,
         value: String(g.appId),
-        description: `${stock} in stock`,
+        description: `${stock} token${stock !== 1 ? 's' : ''} available`,
         emoji: { name: emoji },
       };
     });
@@ -102,7 +106,12 @@ export function buildPanelMessagePayload() {
       },
       {
         name: '📖 Legend',
-        value: '🟢 **10+** slots • 🟡 **Under 10** • 🔴 **Empty**',
+        value: '🟢 **10+** slots • 🟡 **Under 10** • 🔴 **Empty** • 🔥 **High demand** (2-day cooldown)',
+        inline: false,
+      },
+      {
+        name: '⏱️ Cooldowns',
+        value: 'After each activation you must wait before requesting the **same game** again: **24 hours** for most games, **48 hours** for 🔥 high-demand games. You’ll get a DM when a cooldown applies; use `/profile` to see your cooldowns.',
         inline: false,
       },
       {

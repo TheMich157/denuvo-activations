@@ -25,6 +25,10 @@ export async function handleSelect(interaction) {
 
   const result = await createTicketForGame(interaction, appId, { requireTicketCategory: true });
   if (!result.ok) {
+    const isCooldown = /cooldown|again in/i.test(String(result.error));
+    if (isCooldown) {
+      interaction.user.send({ content: `**Request blocked (cooldown)**\n\n${result.error}` }).catch(() => {});
+    }
     await interaction.editReply({ content: result.error });
     return true;
   }

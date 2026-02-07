@@ -1,11 +1,19 @@
 const windows = new Map();
-const CLEANUP_INTERVAL = 60000;
+const CLEANUP_INTERVAL = 60_000;
 
 function getKey(userId, action) {
-  return `${userId}:${action}`;
+  return `${String(userId ?? '')}:${String(action ?? '')}`;
 }
 
-export function checkRateLimit(userId, action, maxAttempts = 5, windowMs = 60000) {
+/**
+ * Check if the user is within rate limit. Returns true if allowed, false if limited.
+ * @param {string} userId - Discord user ID
+ * @param {string} action - Action name (e.g. 'request', 'add')
+ * @param {number} maxAttempts - Max attempts per window
+ * @param {number} windowMs - Window in milliseconds
+ */
+export function checkRateLimit(userId, action, maxAttempts = 5, windowMs = 60_000) {
+  if (!userId || maxAttempts < 1 || windowMs < 1000) return false;
   const key = getKey(userId, action);
   const now = Date.now();
   let entry = windows.get(key);

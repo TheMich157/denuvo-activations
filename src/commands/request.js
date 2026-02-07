@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
-import { searchGames, getGameByAppId } from '../utils/games.js';
+import { searchGames, getGameByAppId, getGameDisplayName } from '../utils/games.js';
 import { createTicketForGame } from '../services/ticket.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
 import { requireGuild } from '../utils/guild.js';
@@ -21,7 +21,7 @@ export async function autocomplete(interaction) {
   const focused = interaction.options.getFocused();
   const games = searchGames(focused);
   await interaction.respond(
-    games.map((g) => ({ name: g.name, value: String(g.appId) }))
+    games.map((g) => ({ name: getGameDisplayName(g), value: String(g.appId) }))
   );
 }
 
@@ -48,15 +48,20 @@ export async function execute(interaction) {
 
   const result = await createTicketForGame(interaction, appId);
   if (!result.ok) {
+    const isCooldown = /cooldown|again in/i.test(String(result.error));
+    if (isCooldown) {
+      interaction.user.send({ content: `**Request blocked (cooldown)**\n\n${result.error}` }).catch(() => {});
+    }
     return interaction.reply({ content: result.error, flags: MessageFlags.Ephemeral });
   }
 
   if (result.channel) {
+    const channelRef = `${result.channel} (${result.channel.name})`;
     await interaction.reply({
-      content: `✅ Ticket created: ${result.channel}. Activators have been notified.`,
+      content: `**Ticket created:** ${channelRef}. Activators have been notified.`,
       flags: MessageFlags.Ephemeral,
     });
   } else {
-    await interaction.reply(result.message);
+    await interaction.reply(result.message ?? { content: 'Ticket created.', flags: MessageFlags.Ephemeral });
   }
 }

@@ -1,7 +1,8 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { searchGames, getGameByAppId } from '../utils/games.js';
-import { addActivatorStock, getActivatorGames } from '../services/activators.js';
+import { addActivatorStock } from '../services/activators.js';
 import { getStockCount } from '../services/stock.js';
+import { logRestock } from '../services/activationLog.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
@@ -51,6 +52,13 @@ export async function execute(interaction) {
   }
 
   addActivatorStock(interaction.user.id, appId, game.name, quantity);
+  logRestock({
+    activatorId: interaction.user.id,
+    gameAppId: appId,
+    gameName: game.name,
+    quantity,
+    method: 'manual',
+  }).catch(() => {});
   const count = getStockCount(appId);
   await interaction.reply({
     content: `Added **${quantity}** piece(s) of **${game.name}** to your stock. **${count}** in stock now. Deducts when you press Done and enter the code. Use \`/add\` for automated mode.`,

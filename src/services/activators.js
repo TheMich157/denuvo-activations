@@ -156,6 +156,10 @@ export function getAvailableStockForGame(gameAppId) {
   return total;
 }
 
+/**
+ * Process due restock queue entries. Returns the processed rows for logging.
+ * @returns {{ activator_id: string; game_app_id: number }[]}
+ */
 export function processRestockQueue() {
   const rows = db.prepare(
     `SELECT id, activator_id, game_app_id FROM stock_restock_queue WHERE restock_at <= datetime('now')`
@@ -167,7 +171,7 @@ export function processRestockQueue() {
     db.prepare('DELETE FROM stock_restock_queue WHERE id = ?').run(row.id);
   }
   if (rows.length > 0) scheduleSave();
-  return rows.length;
+  return rows;
 }
 
 export function cleanupOldRestockEntries() {

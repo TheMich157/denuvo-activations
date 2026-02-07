@@ -7,9 +7,10 @@ import {
   TextInputStyle,
   MessageFlags,
 } from 'discord.js';
-import { searchGames, getGameByAppId } from '../utils/games.js';
+import { searchGames, getGameByAppId, getGameDisplayName } from '../utils/games.js';
 import { addActivatorGame, getActivatorGames } from '../services/activators.js';
 import { getStockCount } from '../services/stock.js';
+import { logRestock } from '../services/activationLog.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { config } from '../config.js';
@@ -31,7 +32,7 @@ export async function autocomplete(interaction) {
   const focused = interaction.options.getFocused();
   const games = searchGames(focused);
   await interaction.respond(
-    games.map((g) => ({ name: g.name, value: String(g.appId) }))
+    games.map((g) => ({ name: getGameDisplayName(g), value: String(g.appId) }))
   );
 }
 
@@ -83,7 +84,15 @@ export async function handleSelect(interaction) {
   const method = interaction.values[0];
 
   if (method === 'manual') {
-    addActivatorGame(interaction.user.id, appId, game.name, 'manual');
+    const initialStock = 5;
+    addActivatorGame(interaction.user.id, appId, game.name, 'manual', null, initialStock);
+    logRestock({
+      activatorId: interaction.user.id,
+      gameAppId: appId,
+      gameName: game.name,
+      quantity: initialStock,
+      method: 'manual',
+    }).catch(() => {});
     const count = getStockCount(appId);
     await interaction.update({
       content: `Added **${game.name}** as manual activation. **${count}** in stock. You'll be pinged when someone requests it. Stock deducts only when you press Done and enter the code.`,
@@ -133,7 +142,15 @@ export async function handleModal(interaction) {
   const username = interaction.fields.getTextInputValue('username');
   const password = interaction.fields.getTextInputValue('password');
 
-  addActivatorGame(interaction.user.id, appId, game.name, 'automated', { username, password });
+  const initialStock = 5;
+  addActivatorGame(interaction.user.id, appId, game.name, 'automated', { username, password }, initialStock);
+  logRestock({
+    activatorId: interaction.user.id,
+    gameAppId: appId,
+    gameName: game.name,
+    quantity: initialStock,
+    method: 'manual',
+  }).catch(() => {});
   const count = getStockCount(appId);
   await interaction.reply({
     content: `Added **${game.name}** with automated activation. **${count}** in stock. Credentials stored encrypted. Stock deducts only when you press Done and enter the code.`,

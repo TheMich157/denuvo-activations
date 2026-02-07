@@ -32,4 +32,8 @@ export function validateConfig() {
   if (!Number.isInteger(points) || points < 1 || points > 1_000_000) {
     throw new Error('POINTS_PER_ACTIVATION must be 1–1,000,000');
   }
+  const restock = config.restockHours;
+  if (!Number.isInteger(restock) || restock < 1 || restock > 8760) {
+    throw new Error('RESTOCK_HOURS must be 1–8760 (max 1 year)');
+  }
 }

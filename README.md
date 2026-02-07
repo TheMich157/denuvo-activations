@@ -43,17 +43,16 @@ ENCRYPTION_KEY=64_character_hex_string  # 32 bytes, e.g. openssl rand -hex 32
 | `/stock` | Activators: Quick-add a game to stock (manual only) |
 | `/removestock` | Activators: Remove stock from a game (game + quantity) |
 | `/remove` | Activators: Remove a game from your list |
-| `/mylist` | Activators: List your registered games + daily limits |
 | `/request` | Request a game activation (opens ticket, pings activators) |
-| `/balance` | Check your points |
-| `/profile` | View your profile (credits, games, method) |
+| `/profile` | View your profile: credits (points) and, for activators, your games list with stock and restock |
 | `/shop` | View point packages |
 | `/addpoints` | Activators: Add points to user (for purchases) |
-| `/strikes` | Check your strikes (or another user's, Activator only) |
-| `/clearestrikes` | Activators: Clear strikes for a user |
 | `/ticketpanel` | Activators: Post ticket panel (one globally; replaces previous) |
 | `/closepanel` | Activators: Close the ticket panel |
 | `/reloadgames` | Activators: Reload game list from list.json |
+| `/pricegame` | Whitelisted: Look up Steam or reseller prices; optional **source** (Steam / Resellers), **type** (Key / Account / Any); leave game empty for all Steam prices |
+
+**High-demand games** (marked with 🔥 in the list) have a **2-day cooldown** for normal users; other games have a 24h cooldown. Set `"highDemand": true` in `list.json` for a game to use the 2-day cooldown.
 
 ## Flow
 
@@ -62,7 +61,7 @@ ENCRYPTION_KEY=64_character_hex_string  # 32 bytes, e.g. openssl rand -hex 32
 3. **First activator** to press "I'll handle this" is assigned; ticket becomes visible only to buyer + issuer
 4. Issuer goes to drm.steam.run, extracts auth, fills, submits → gets code
 5. Issuer presses "Done", enters code → embed sent to ticket with copy button; points to issuer
-6. Or "Invalid token" → strike to issuer; "Call activator" pings activators
+6. Or "Invalid token" → request marked failed; "Call activator" pings activators
 
 ## Automated Auth Code Generation (drm.steam.run)
 

@@ -2,7 +2,7 @@ import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { addPoints } from '../services/points.js';
 import { formatPointsAsMoney } from '../utils/pointsFormat.js';
 import { isActivator } from '../utils/activator.js';
-import { isValidReason, isValidPointsAmount } from '../utils/validate.js';
+import { isValidReason, isValidPointsAmount, sanitizeError } from '../utils/validate.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
 import { requireGuild } from '../utils/guild.js';
 
@@ -34,6 +34,16 @@ export async function execute(interaction) {
     return interaction.reply({ content: 'Reason must be 1–100 characters.', flags: MessageFlags.Ephemeral });
   }
   const type = reason.length > 50 ? reason.slice(0, 47) + '...' : reason;
-  addPoints(user.id, amount, type);
-  await interaction.reply({ content: `Added **${amount}** points to <@${user.id}> (${formatPointsAsMoney(amount)}).`, flags: MessageFlags.Ephemeral });
+  try {
+    addPoints(user.id, amount, type);
+    await interaction.reply({
+      content: `Added **${amount}** points to <@${user.id}> (${formatPointsAsMoney(amount)}).`,
+      flags: MessageFlags.Ephemeral,
+    });
+  } catch (err) {
+    await interaction.reply({
+      content: `Could not add points: ${sanitizeError(err)}`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 }
