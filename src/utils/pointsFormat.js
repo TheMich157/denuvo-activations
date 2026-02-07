@@ -1,5 +1,3 @@
-import { MessageFlags } from 'discord.js';
-
 const CENTS_PER_POINT = 1;
 const MAX_SAFE_POINTS = 100000;
 

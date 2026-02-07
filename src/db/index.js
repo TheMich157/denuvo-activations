@@ -1,5 +1,5 @@
 import initSqlJs from 'sql.js';
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, statSync, accessSync, constants } from 'fs';
 import { debug } from '../utils/debug.js';
 
 const log = debug('db');
@@ -8,8 +8,45 @@ import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR || join(__dirname, '../../data');
+const isCustomDir = !!process.env.DATA_DIR;
 if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
 const dbPath = join(dataDir, 'bot.db');
+
+// ---- Startup storage diagnostics ----
+function logStorageDiagnostics() {
+  console.log('[Storage] ─────────────────────────────────');
+  console.log(`[Storage] Data dir:    ${dataDir}`);
+  console.log(`[Storage] DB path:     ${dbPath}`);
+  console.log(`[Storage] Source:      ${isCustomDir ? 'DATA_DIR env (Render Disk / custom)' : 'Default (./data)'}`);
+
+  // Check if directory exists and is writable
+  try {
+    accessSync(dataDir, constants.W_OK);
+    console.log('[Storage] Writable:    ✅ Yes');
+  } catch {
+    console.error('[Storage] Writable:    ❌ NO — database saves will fail!');
+  }
+
+  // Check if DB file already exists (persistence test)
+  if (existsSync(dbPath)) {
+    try {
+      const stat = statSync(dbPath);
+      const sizeKb = (stat.size / 1024).toFixed(1);
+      const modified = stat.mtime.toISOString();
+      console.log(`[Storage] DB exists:   ✅ Yes (${sizeKb} KB, last modified: ${modified})`);
+      console.log('[Storage] Persistent:  ✅ Data survived restart');
+    } catch {
+      console.log('[Storage] DB exists:   ✅ Yes (could not read stats)');
+    }
+  } else {
+    console.log('[Storage] DB exists:   ⚠️  No — creating new database');
+    if (isCustomDir) {
+      console.warn('[Storage] ⚠️  If you expected data to persist, check your Render Disk mount.');
+    }
+  }
+  console.log('[Storage] ─────────────────────────────────');
+}
+logStorageDiagnostics();
 
 let sqlDb = null;
 
@@ -193,6 +230,7 @@ export async function initDb() {
 }
 
 let saveTimeout = null;
+let firstSave = true;
 const SAVE_DEBOUNCE_MS = 1000;
 
 function saveDb() {
@@ -202,8 +240,22 @@ function saveDb() {
     const data = sqlDb.export();
     writeFileSync(dbPath, Buffer.from(data), { flag: 'w' });
     log('saved', dbPath);
+    if (firstSave) {
+      firstSave = false;
+      // Verify the file was actually written
+      if (existsSync(dbPath)) {
+        const stat = statSync(dbPath);
+        console.log(`[Storage] First save:  ✅ OK (${(stat.size / 1024).toFixed(1)} KB written to disk)`);
+      } else {
+        console.error('[Storage] First save:  ❌ File not found after write — disk may not be mounted!');
+      }
+    }
   } catch (err) {
     console.error('[DB] Save failed:', err.message);
+    if (firstSave) {
+      firstSave = false;
+      console.error('[Storage] First save:  ❌ FAILED — check disk permissions and mount path');
+    }
   }
 }
 

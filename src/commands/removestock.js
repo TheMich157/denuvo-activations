@@ -2,6 +2,9 @@ import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { getGameByAppId } from '../utils/games.js';
 import { removeActivatorStock, getActivatorGames } from '../services/activators.js';
 import { getStockCount } from '../services/stock.js';
+import { logRestock } from '../services/activationLog.js';
+import { syncPanelMessage } from '../services/panel.js';
+import { buildPanelMessagePayload } from './ticketpanel.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
@@ -62,6 +65,15 @@ export async function execute(interaction) {
     return interaction.reply({ content: result.error, flags: MessageFlags.Ephemeral });
   }
 
+  // Log the removal
+  logRestock({
+    activatorId: interaction.user.id,
+    gameAppId: appId,
+    gameName: game.name,
+    quantity: -result.removed,
+    method: 'manual',
+  }).catch(() => {});
+
   const totalStock = getStockCount(appId);
   const msg =
     result.remaining === 0
@@ -69,4 +81,7 @@ export async function execute(interaction) {
       : `Removed **${result.removed}** piece(s) of **${game.name}**. **${result.remaining}** left in your stock. **${totalStock}** total in stock.`;
 
   await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
+
+  // Auto-refresh panel
+  syncPanelMessage(interaction.client, buildPanelMessagePayload()).catch(() => {});
 }

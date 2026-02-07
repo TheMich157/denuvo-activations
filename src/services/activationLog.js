@@ -114,21 +114,27 @@ export async function logRequestFailed(req, reason = 'failed') {
  * @param {'manual' | 'automatic'} opts.method
  */
 export async function logRestock({ activatorId, gameAppId, gameName, quantity, method }) {
-  if (!activatorId || !gameAppId || quantity < 1) return;
+  if (!activatorId || !gameAppId || quantity === 0) return;
   const isAuto = method === 'automatic';
+  const isRemoval = quantity < 0;
+  const absQty = Math.abs(quantity);
+  const title = isRemoval ? '📤 Stock removed' : isAuto ? '🔄 Automatic restock' : '📦 Manual restock';
+  const color = isRemoval ? 0xe74c3c : isAuto ? 0x3498db : 0x9b59b6;
+  const desc = isRemoval
+    ? `**${absQty}** slot(s) removed manually.`
+    : isAuto
+      ? `**${absQty}** slot(s) restocked automatically (after cooldown).`
+      : `**${absQty}** slot(s) added manually.`;
+  const methodLabel = isRemoval ? 'Manual (/removestock)' : isAuto ? 'Automatic (scheduled)' : 'Manual (/stock or /add)';
   const embed = new EmbedBuilder()
-    .setColor(isAuto ? 0x3498db : 0x9b59b6)
-    .setTitle(isAuto ? '🔄 Automatic restock' : '📦 Manual restock')
-    .setDescription(
-      isAuto
-        ? `**${quantity}** slot(s) restocked automatically (after cooldown).`
-        : `**${quantity}** slot(s) added manually.`
-    )
+    .setColor(color)
+    .setTitle(title)
+    .setDescription(desc)
     .addFields(
       { name: 'Game', value: `${gameName || '—'} (\`${gameAppId}\`)`, inline: true },
-      { name: 'Quantity', value: String(quantity), inline: true },
+      { name: 'Quantity', value: `${isRemoval ? '-' : '+'}${absQty}`, inline: true },
       { name: 'Activator', value: `<@${activatorId}> (\`${activatorId}\`)`, inline: false },
-      { name: 'Method', value: isAuto ? 'Automatic (scheduled)' : 'Manual (/stock or /add)', inline: true }
+      { name: 'Method', value: methodLabel, inline: true }
     )
     .setTimestamp();
   await sendToLogChannel(embed);
