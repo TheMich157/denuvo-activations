@@ -440,6 +440,16 @@ export async function initDb() {
         PRIMARY KEY(user_id)
       )
     `);
+
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS user_levels (
+        user_id TEXT PRIMARY KEY,
+        xp INTEGER DEFAULT 0,
+        level INTEGER DEFAULT 0,
+        total_messages INTEGER DEFAULT 0,
+        last_xp_at TEXT
+      )
+    `).run();
   } catch {}
   return db;
 }

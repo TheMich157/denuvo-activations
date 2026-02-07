@@ -103,6 +103,8 @@ client.on(Events.MessageCreate, handleMessage);
 
 client.on(Events.GuildMemberAdd, async (member) => {
   if (member.user.bot) return;
+  const { EmbedBuilder } = await import('discord.js');
+
   // Auto-assign unverified role on join
   if (config.unverifiedRoleId) {
     try {
@@ -112,20 +114,58 @@ client.on(Events.GuildMemberAdd, async (member) => {
       console.error(`[Verify] Failed to assign unverified role to ${member.user.tag}:`, err.message);
     }
   }
-  // Send a welcome hint to the verify channel
-  if (config.verifyChannelId) {
+
+  // Welcome message in the welcome channel
+  const welcomeChId = config.welcomeChannelId || config.verifyChannelId;
+  if (welcomeChId) {
     try {
-      const channel = await member.client.channels.fetch(config.verifyChannelId).catch(() => null);
+      const channel = await member.client.channels.fetch(welcomeChId).catch(() => null);
       if (channel) {
-        const embed = new (await import('discord.js')).EmbedBuilder()
-          .setColor(0x5865F2)
-          .setDescription(`👋 Welcome <@${member.id}>! Ping me here to start your verification quiz and unlock the server.`)
-          .setFooter({ text: 'Type @DenuBrew or mention the bot to begin' });
-        const msg = await channel.send({ content: `<@${member.id}>`, embeds: [embed] });
-        setTimeout(() => msg.delete().catch(() => {}), 60000);
+        const memberCount = member.guild.memberCount;
+        const verifyMention = config.verifyChannelId ? `<#${config.verifyChannelId}>` : 'the verification channel';
+        const embed = new EmbedBuilder()
+          .setColor(0x57f287)
+          .setAuthor({ name: member.user.tag, iconURL: member.user.displayAvatarURL({ size: 128 }) })
+          .setTitle('Welcome to DenuBrew!')
+          .setDescription(
+            [
+              `Hey <@${member.id}>, welcome to **DenuBrew**! You are member **#${memberCount}**.`,
+              '',
+              `Head over to ${verifyMention} and ping the bot to complete your **verification quiz** and unlock the server.`,
+              '',
+              '**What we do:**',
+              'We provide free Denuvo DRM activation tokens for your legitimately owned Steam games.',
+              '',
+              'Once verified, use the **activation panel** to request a game activation!',
+            ].join('\n')
+          )
+          .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+          .setFooter({ text: `Member #${memberCount} \u2022 DenuBrew` })
+          .setTimestamp();
+
+        await channel.send({ content: `<@${member.id}>`, embeds: [embed] });
       }
     } catch {}
   }
+});
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  if (member.user.bot) return;
+  const welcomeChId = config.welcomeChannelId || config.verifyChannelId;
+  if (!welcomeChId) return;
+  try {
+    const { EmbedBuilder } = await import('discord.js');
+    const channel = await member.client.channels.fetch(welcomeChId).catch(() => null);
+    if (channel) {
+      const embed = new EmbedBuilder()
+        .setColor(0xed4245)
+        .setAuthor({ name: member.user.tag, iconURL: member.user.displayAvatarURL({ size: 128 }) })
+        .setDescription(`**${member.user.tag}** has left the server. We now have **${member.guild.memberCount}** members.`)
+        .setFooter({ text: 'DenuBrew' })
+        .setTimestamp();
+      await channel.send({ embeds: [embed] });
+    }
+  } catch {}
 });
 
 // Global error handlers to prevent crashes

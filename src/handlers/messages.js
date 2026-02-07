@@ -33,6 +33,7 @@ import {
   logPreorderStatus,
 } from '../services/activationLog.js';
 import { startVerificationInChannel } from '../services/verification.js';
+import { addMessageXp, xpForLevel, getLevelTitle, getLevelEmoji, progressBar } from '../services/leveling.js';
 
 const IMAGE_EXT = /\.(png|jpg|jpeg|webp|gif)(\?.*)?$/i;
 const FAIL_THRESHOLD = 5;
@@ -550,6 +551,30 @@ async function handleManifestRequest(message) {
 
 export async function handleMessage(message) {
   if (message.author.bot || !message.guild) return;
+
+  // ── Leveling XP ──────────────────────────────────────────
+  try {
+    const result = addMessageXp(message.author.id);
+    if (result && result.leveledUp) {
+      const title = getLevelTitle(result.newLevel);
+      const emoji = getLevelEmoji(result.newLevel);
+      const needed = xpForLevel(result.newLevel);
+      const bar = progressBar(result.xp, needed, 12);
+      const embed = new EmbedBuilder()
+        .setColor(0xfee75c)
+        .setAuthor({ name: message.author.displayName, iconURL: message.author.displayAvatarURL({ size: 64 }) })
+        .setDescription(
+          [
+            `${emoji} <@${message.author.id}> leveled up to **Level ${result.newLevel}** — *${title}*!`,
+            `\`${bar}\` 0 / ${needed.toLocaleString()} XP`,
+          ].join('\n')
+        )
+        .setTimestamp();
+      await message.channel.send({ embeds: [embed] }).catch(() => {});
+    }
+  } catch (err) {
+    console.error('[Leveling] XP error:', err.message);
+  }
 
   // Handle verification channel — user pings the bot to start quiz
   if (config.verifyChannelId && message.channelId === config.verifyChannelId) {

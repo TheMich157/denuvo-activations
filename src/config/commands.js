@@ -15,5 +15,5 @@ export const STAFF_COMMANDS = ['away', 'waitlist'];
 /** Commands anyone in the server can use (no restrictions) */
 export const PUBLIC_COMMANDS = [
   'profile', 'stats', 'leaderboard', 'shop',
-  'pricegame', 'settings', 'transfer', 'appeal', 'vote',
+  'pricegame', 'settings', 'transfer', 'appeal', 'vote', 'level',
 ];

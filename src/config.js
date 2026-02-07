@@ -23,6 +23,7 @@ export const config = {
   lowTierRoleId: process.env.LOW_TIER_ROLE_ID || null,
   midTierRoleId: process.env.MID_TIER_ROLE_ID || null,
   highTierRoleId: process.env.HIGH_TIER_ROLE_ID || null,
+  welcomeChannelId: process.env.WELCOME_CHANNEL_ID || null,
 };
 
 const REQUIRED = ['token', 'clientId', 'activatorRoleId', 'ticketCategoryId'];
