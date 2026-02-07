@@ -110,6 +110,70 @@ function detectKofiPayment(text) {
   return { isKofi, amount };
 }
 
+/**
+ * Format spots text showing claimed / verified / remaining.
+ */
+function formatSpotsText(spots) {
+  if (!spots) return 'Unknown';
+  if (spots.unlimited) {
+    return `${spots.claimed} claimed • ${spots.verified} verified`;
+  }
+  return `${spots.claimed} claimed • ${spots.verified}/${spots.total} verified • **${spots.remaining}** remaining`;
+}
+
+/**
+ * Update the original preorder forum post embed with the latest spot counts.
+ */
+async function updatePreorderForumPost(client, preorder, preorderId) {
+  if (!preorder.thread_id) return;
+  try {
+    const thread = await client.channels.fetch(preorder.thread_id).catch(() => null);
+    if (!thread) return;
+
+    const starterMessage = await thread.fetchStarterMessage().catch(() => null);
+    if (!starterMessage) return;
+
+    const spots = getPreorderSpots(preorderId);
+    const currentPreorder = getPreorder(preorderId);
+    const status = currentPreorder?.status || preorder.status;
+    const spotsText = formatSpotsText(spots);
+
+    const statusEmoji = status === 'open' ? '🟢 Open' : status === 'closed' ? '🔴 Closed' : status === 'fulfilled' ? '✅ Fulfilled' : status;
+
+    const updatedEmbed = new EmbedBuilder()
+      .setColor(status === 'open' ? 0xe91e63 : status === 'closed' ? 0xed4245 : 0x57f287)
+      .setTitle(`🛒 Preorder #${preorderId}: ${preorder.game_name}`)
+      .setDescription(
+        [
+          preorder.description || `Preorder for **${preorder.game_name}** is now open!`,
+          '',
+          `**💰 Minimum donation:** $${preorder.price.toFixed(2)}`,
+          `**🎟️ Spots:** ${spotsText}`,
+          `**🔗 Donate:** [Ko-fi](${config.kofiUrl})`,
+          '',
+          '**How to claim your spot:**',
+          `1. Click **"Reserve Spot"** to hold your place`,
+          `2. Donate at least **$${preorder.price.toFixed(2)}** on [Ko-fi](${config.kofiUrl})`,
+          `3. Post your receipt screenshot in <#${config.tipVerifyChannelId || 'tip-verify'}> with **#${preorderId}**`,
+          '4. Bot auto-verifies your payment and **confirms your spot**',
+          '5. Once fulfilled, you\'ll receive your activation!',
+          '',
+          '> Reserved spots must be verified within 48 hours or they will be released.',
+        ].join('\n')
+      )
+      .addFields(
+        { name: '🎮 Game', value: preorder.game_name, inline: true },
+        { name: '📋 Status', value: statusEmoji, inline: true },
+        { name: '🎟️ Spots', value: spotsText, inline: true },
+        { name: '👤 Created by', value: `<@${preorder.created_by}>`, inline: true },
+      )
+      .setFooter({ text: `Preorder #${preorderId} • ${spotsText}` })
+      .setTimestamp();
+
+    await starterMessage.edit({ embeds: [updatedEmbed] }).catch(() => {});
+  } catch {}
+}
+
 async function handleTipVerification(message) {
   if (!config.tipVerifyChannelId || message.channelId !== config.tipVerifyChannelId) return false;
 
@@ -200,10 +264,19 @@ async function handleTipVerification(message) {
     return true;
   }
 
-  // Submit claim if not already claimed
+  // Check if already verified
   const existingClaim = getClaim(preorderId, message.author.id);
-  if (!existingClaim) {
-    submitClaim(preorderId, message.author.id, message.id);
+  if (existingClaim && existingClaim.verified) {
+    await message.react('ℹ️').catch(() => {});
+    await message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x3498db)
+          .setDescription(`You already have a **verified** spot on preorder **#${preorderId}** (${preorder.game_name}). You'll be notified when it's fulfilled!`)
+          .setTimestamp(),
+      ],
+    });
+    return true;
   }
 
   // Determine verification
@@ -212,23 +285,24 @@ async function handleTipVerification(message) {
   const autoVerified = isKofi && meetsAmount;
 
   if (autoVerified) {
-    // Auto-verify
+    // Auto-verify — create claim if they didn't use the button, then verify
+    if (!existingClaim) {
+      submitClaim(preorderId, message.author.id, message.id);
+    }
     verifyClaim(preorderId, message.author.id);
     await message.react('✅').catch(() => {});
 
     const spots = getPreorderSpots(preorderId);
-    const spotsText = spots?.unlimited
-      ? `${spots.verified} verified`
-      : `${spots.verified}/${spots.total} verified • **${spots.remaining}** remaining`;
+    const spotsText = formatSpotsText(spots);
 
     const embed = new EmbedBuilder()
       .setColor(0x57f287)
-      .setTitle('✅ Tip Verified!')
+      .setTitle('✅ Tip Verified — Spot Confirmed!')
       .setDescription(
         [
           `Payment of **$${amount.toFixed(2)}** detected for preorder **#${preorderId}** (${preorder.game_name}).`,
           '',
-          '**Your spot is confirmed!** You\'ll be notified when the preorder is fulfilled.',
+          '**Your spot is now confirmed!** You\'ll be notified when the preorder is fulfilled.',
           '',
           `🎟️ ${spotsText}`,
         ].join('\n')
@@ -246,7 +320,7 @@ async function handleTipVerification(message) {
         embeds: [
           new EmbedBuilder()
             .setColor(0x57f287)
-            .setTitle('✅ Spot Claimed & Verified!')
+            .setTitle('✅ Spot Confirmed!')
             .setDescription(
               [
                 `Your **$${amount.toFixed(2)}** donation for preorder **#${preorderId}** (${preorder.game_name}) has been **auto-verified**!`,
@@ -262,6 +336,9 @@ async function handleTipVerification(message) {
       }).catch(() => {});
     } catch {}
 
+    // Update the forum post embed with new spot counts
+    await updatePreorderForumPost(message.client, preorder, preorderId);
+
     // Notify the preorder thread
     if (preorder.thread_id) {
       try {
@@ -271,7 +348,7 @@ async function handleTipVerification(message) {
             embeds: [
               new EmbedBuilder()
                 .setColor(0x57f287)
-                .setDescription(`✅ <@${message.author.id}> verified a **$${amount.toFixed(2)}** tip.\n🎟️ ${spotsText}`)
+                .setDescription(`✅ <@${message.author.id}>'s **$${amount.toFixed(2)}** tip verified — spot confirmed!\n🎟️ ${spotsText}`)
                 .setTimestamp(),
             ],
           });
@@ -283,6 +360,7 @@ async function handleTipVerification(message) {
     if (isPreorderFull(preorderId)) {
       closePreorder(preorderId);
       logPreorderStatus({ preorderId, gameName: preorder.game_name, action: 'closed', actor: message.client.user.id, spotsInfo: spots }).catch(() => {});
+      await updatePreorderForumPost(message.client, { ...preorder, status: 'closed' }, preorderId);
       if (preorder.thread_id) {
         try {
           const thread = await message.client.channels.fetch(preorder.thread_id).catch(() => null);
@@ -302,6 +380,11 @@ async function handleTipVerification(message) {
     }
   } else {
     // Needs manual review — detected partial info or failed OCR
+    // Create a pending claim if they didn't use the button
+    if (!existingClaim) {
+      submitClaim(preorderId, message.author.id, message.id);
+    }
+
     await message.react('⏳').catch(() => {});
 
     const issues = [];
@@ -320,6 +403,7 @@ async function handleTipVerification(message) {
           ...issues,
           '',
           'An activator will manually review your proof shortly.',
+          'Your spot is reserved but **not yet confirmed** — awaiting staff verification.',
           `Minimum donation: **$${minDonation.toFixed(2)}** on [Ko-fi](${config.kofiUrl})`,
         ].join('\n')
       )
@@ -330,7 +414,7 @@ async function handleTipVerification(message) {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`verify_tip:${preorderId}:${message.author.id}`)
-        .setLabel('Verify tip manually')
+        .setLabel('Verify — confirm spot')
         .setStyle(ButtonStyle.Success)
         .setEmoji('✅'),
       new ButtonBuilder()
@@ -341,6 +425,9 @@ async function handleTipVerification(message) {
     );
 
     await message.reply({ embeds: [embed], components: [row] });
+
+    // Update forum post to show new claimed count
+    await updatePreorderForumPost(message.client, preorder, preorderId);
   }
 
   return true;

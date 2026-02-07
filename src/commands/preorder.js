@@ -6,78 +6,62 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
-  PermissionFlagsBits,
 } from 'discord.js';
-import { config } from '../config.js';
 import { requireGuild } from '../utils/guild.js';
 import {
   createPreorder,
   setPreorderThread,
   getPreorder,
   getOpenPreorders,
+  closePreorder,
   deletePreorder,
   fulfillPreorder,
   refillPreorder,
   getClaimsForPreorder,
   getPreorderSpots,
 } from '../services/preorder.js';
+import { config } from '../config.js';
 import {
   logPreorderCreated,
   logPreorderStatus,
 } from '../services/activationLog.js';
-import { createRequest, setTicketChannel, assignIssuer } from '../services/requests.js';
-import { getActivatorsForGame, getBestActivator, getCredentials } from '../services/activators.js';
-import { isAway } from '../services/activatorStatus.js';
-import { notifyActivators } from '../services/statusNotify.js';
-
-function spotsLabel(spots) {
-  if (!spots) return '—';
-  if (spots.unlimited) return `${spots.verified} verified (unlimited)`;
-  return `${spots.verified}/${spots.total} verified • **${spots.remaining}** remaining`;
-}
 
 export const data = new SlashCommandBuilder()
   .setName('preorder')
-  .setDescription('Manage game preorders (Activator only)')
+  .setDescription('Manage game preorders')
   .setContexts(0)
   .addSubcommand((sub) =>
-    sub
-      .setName('create')
-      .setDescription('Create a new game preorder')
+    sub.setName('create')
+      .setDescription('Create a new preorder')
       .addStringOption((o) => o.setName('game').setDescription('Game name').setRequired(true))
+      .addNumberOption((o) => o.setName('price').setDescription('Minimum donation price ($)').setRequired(true))
       .addIntegerOption((o) => o.setName('spots').setDescription('Max spots (0 = unlimited)').setRequired(false))
-      .addNumberOption((o) => o.setName('price').setDescription('Minimum donation in $ (default: 5)').setRequired(false))
       .addIntegerOption((o) => o.setName('appid').setDescription('Steam App ID (optional)').setRequired(false))
-      .addStringOption((o) => o.setName('description').setDescription('Extra details about the preorder').setRequired(false))
+      .addStringOption((o) => o.setName('description').setDescription('Description (optional)').setRequired(false))
   )
   .addSubcommand((sub) =>
-    sub
-      .setName('list')
-      .setDescription('View all open preorders')
+    sub.setName('list')
+      .setDescription('List all open preorders')
   )
   .addSubcommand((sub) =>
-    sub
-      .setName('guide')
-      .setDescription('Post a public guide explaining preorders and payment verification')
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('close')
-      .setDescription('Close a preorder')
+    sub.setName('close')
+      .setDescription('Close and delete a preorder')
       .addIntegerOption((o) => o.setName('id').setDescription('Preorder ID').setRequired(true))
   )
   .addSubcommand((sub) =>
-    sub
-      .setName('fulfill')
-      .setDescription('Mark a preorder as fulfilled (game activated for all verified users)')
+    sub.setName('fulfill')
+      .setDescription('Fulfill a preorder — notify verified users')
       .addIntegerOption((o) => o.setName('id').setDescription('Preorder ID').setRequired(true))
   )
   .addSubcommand((sub) =>
-    sub
-      .setName('refill')
-      .setDescription('Reopen a closed/fulfilled preorder with optional new spot count')
+    sub.setName('refill')
+      .setDescription('Reopen a closed preorder')
       .addIntegerOption((o) => o.setName('id').setDescription('Preorder ID').setRequired(true))
-      .addIntegerOption((o) => o.setName('spots').setDescription('New max spots (0 = unlimited, leave empty to keep current)').setRequired(false))
+      .addIntegerOption((o) => o.setName('spots').setDescription('New max spots (optional)').setRequired(false))
+  )
+  .addSubcommand((sub) =>
+    sub.setName('guide')
+      .setDescription('Post a locked guide in the preorder forum channel')
   );
 
 export async function execute(interaction) {
@@ -86,15 +70,16 @@ export async function execute(interaction) {
 
   const sub = interaction.options.getSubcommand();
 
+  /* ───────── CREATE ───────── */
   if (sub === 'create') {
     const gameName = interaction.options.getString('game');
-    const price = interaction.options.getNumber('price') ?? config.minDonation;
+    const price = interaction.options.getNumber('price');
+    const maxSpots = interaction.options.getInteger('spots') ?? 0;
     const appId = interaction.options.getInteger('appid');
     const description = interaction.options.getString('description');
-    const maxSpots = interaction.options.getInteger('spots') ?? 0;
 
     if (price < 1) {
-      return interaction.reply({ content: 'Minimum price is $1.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: 'Price must be at least $1.', flags: MessageFlags.Ephemeral });
     }
     if (maxSpots < 0) {
       return interaction.reply({ content: 'Spots must be 0 (unlimited) or a positive number.', flags: MessageFlags.Ephemeral });
@@ -108,7 +93,7 @@ export async function execute(interaction) {
       try {
         const channel = await interaction.client.channels.fetch(config.preorderChannelId);
         if (channel && channel.type === ChannelType.GuildForum) {
-          const spotsText = maxSpots > 0 ? `**${maxSpots}** spots available` : 'Unlimited spots';
+          const spotsText = maxSpots > 0 ? `0/${maxSpots} claimed • **${maxSpots}** remaining` : 'Unlimited spots';
 
           const preorderEmbed = new EmbedBuilder()
             .setColor(0xe91e63)
@@ -121,13 +106,14 @@ export async function execute(interaction) {
                 `**🎟️ Spots:** ${spotsText}`,
                 `**🔗 Donate:** [Ko-fi](${config.kofiUrl})`,
                 '',
-                '**How to claim:**',
-                `1. Donate at least **$${price.toFixed(2)}** on [Ko-fi](${config.kofiUrl})`,
-                `2. Click the **"I\'ve donated"** button below to claim your spot`,
-                `3. Post your tip proof screenshot in <#${config.tipVerifyChannelId || 'tip-verify'}>`,
-                `4. Mention preorder **#${preorderId}** in your proof`,
-                '5. Bot will auto-verify your payment',
-                '6. Once fulfilled, you\'ll receive your activation!',
+                '**How to claim your spot:**',
+                `1. Click **"Reserve Spot"** below to hold your place`,
+                `2. Donate at least **$${price.toFixed(2)}** on [Ko-fi](${config.kofiUrl})`,
+                `3. Post your receipt screenshot in <#${config.tipVerifyChannelId || 'tip-verify'}> with **#${preorderId}**`,
+                '4. Bot auto-verifies your payment and **confirms your spot**',
+                '5. Once fulfilled, you\'ll receive your activation!',
+                '',
+                '> Reserved spots must be verified within 48 hours or they will be released.',
               ].join('\n')
             )
             .addFields(
@@ -147,9 +133,9 @@ export async function execute(interaction) {
               .setEmoji('☕'),
             new ButtonBuilder()
               .setCustomId(`preorder_claim:${preorderId}`)
-              .setLabel('I\'ve donated — claim spot')
+              .setLabel('Reserve Spot')
               .setStyle(ButtonStyle.Success)
-              .setEmoji('✅'),
+              .setEmoji('🎟️'),
           );
 
           forumPost = await channel.threads.create({
@@ -167,7 +153,21 @@ export async function execute(interaction) {
       }
     }
 
-    // Log
+    const embed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle('✅ Preorder Created')
+      .setDescription(
+        [
+          `**#${preorderId}** — ${gameName}`,
+          `💰 Price: $${price.toFixed(2)}`,
+          `🎟️ Max spots: ${maxSpots || 'Unlimited'}`,
+          forumPost ? `📌 Forum post: <#${forumPost.id}>` : '📌 No forum post (PREORDER_CHANNEL_ID not set)',
+        ].join('\n')
+      )
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+
     logPreorderCreated({
       preorderId,
       gameName,
@@ -176,130 +176,41 @@ export async function execute(interaction) {
       createdBy: interaction.user.id,
       threadId: forumPost?.id || null,
     }).catch(() => {});
-
-    const spotsNote = maxSpots > 0 ? ` (${maxSpots} spots)` : ' (unlimited spots)';
-    const replyText = forumPost
-      ? `✅ Preorder **#${preorderId}** created for **${gameName}** ($${price.toFixed(2)})${spotsNote}. Post: <#${forumPost.id}>`
-      : `✅ Preorder **#${preorderId}** created for **${gameName}** ($${price.toFixed(2)})${spotsNote}.`;
-
-    return interaction.reply({ content: replyText, flags: MessageFlags.Ephemeral });
   }
 
-  if (sub === 'guide') {
-    if (!config.preorderChannelId) {
-      return interaction.reply({ content: 'PREORDER_CHANNEL_ID is not configured. Set it in `.env` first.', flags: MessageFlags.Ephemeral });
-    }
-
-    const channel = await interaction.client.channels.fetch(config.preorderChannelId).catch(() => null);
-    if (!channel || channel.type !== ChannelType.GuildForum) {
-      return interaction.reply({ content: 'The preorder channel must be a **Forum** channel.', flags: MessageFlags.Ephemeral });
-    }
-
-    const guideEmbed = new EmbedBuilder()
-      .setColor(0xe91e63)
-      .setTitle('🛒 How Preorders Work')
-      .setDescription(
-        [
-          'Preorders let you request **upcoming or high-demand games** before they\'re available in the regular panel. Here\'s how it works:',
-          '',
-          '**━━━━━━━━━━━━━━━━━━━━━━**',
-          '',
-          '**Step 1 — Find a Preorder**',
-          'Browse this forum for open preorder posts. Each post is a game you can preorder.',
-          '',
-          '**Step 2 — Donate on Ko-fi**',
-          `Go to **[Ko-fi](${config.kofiUrl})** and donate the required minimum amount (usually **$${config.minDonation}+**).`,
-          'Include your **Discord username** or the **preorder number** in the Ko-fi message so we can match it to you.',
-          '',
-          '**Step 3 — Claim Your Spot**',
-          'Click the **"I\'ve donated — claim spot"** button on the preorder post you donated for.',
-          '',
-          '**Step 4 — Post Your Proof**',
-          config.tipVerifyChannelId
-            ? `Head to <#${config.tipVerifyChannelId}> and post a **screenshot** of your Ko-fi receipt.`
-            : 'Post a **screenshot** of your Ko-fi receipt in the tip verification channel.',
-          'Include the preorder number in your message, e.g.:',
-          '```',
-          '#5  or  preorder 5',
-          '```',
-          '',
-          '**Step 5 — Automatic Verification**',
-          'The bot will scan your screenshot and **auto-verify** your payment if it detects:',
-          '• A Ko-fi / tip / donation receipt',
-          `• The correct dollar amount (**$${config.minDonation}+** or whatever the preorder requires)`,
-          '',
-          'If auto-verification fails, an activator will **manually review** your proof.',
-          '',
-          '**Step 6 — Get Your Game**',
-          'Once the preorder is **fulfilled**, you\'ll receive a DM and your activation will be handled!',
-          '',
-          '**━━━━━━━━━━━━━━━━━━━━━━**',
-        ].join('\n')
-      )
-      .setTimestamp();
-
-    const donateRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setLabel('Donate on Ko-fi')
-        .setStyle(ButtonStyle.Link)
-        .setURL(config.kofiUrl)
-        .setEmoji('☕'),
-    );
-
-    try {
-      const guidePost = await channel.threads.create({
-        name: '📌 Guide — How to Preorder',
-        autoArchiveDuration: 10080,
-        message: {
-          embeds: [guideEmbed],
-          components: [donateRow],
-        },
-      });
-      await guidePost.setLocked(true);
-      await guidePost.pin().catch(() => {});
-      return interaction.reply({
-        content: `✅ Guide posted and locked in the forum: <#${guidePost.id}>`,
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (err) {
-      return interaction.reply({
-        content: `Failed to create guide post: ${err.message || 'Unknown error'}. Make sure the bot has permissions to create and manage threads in the forum channel.`,
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-  }
-
-  if (sub === 'list') {
-    const preorders = getOpenPreorders();
-    if (preorders.length === 0) {
+  /* ───────── LIST ───────── */
+  else if (sub === 'list') {
+    const open = getOpenPreorders();
+    if (open.length === 0) {
       return interaction.reply({ content: 'No open preorders.', flags: MessageFlags.Ephemeral });
     }
 
-    const lines = preorders.map((p) => {
+    const lines = open.map((p) => {
       const spots = getPreorderSpots(p.id);
-      const threadLink = p.thread_id ? ` • <#${p.thread_id}>` : '';
-      return `**#${p.id}** — **${p.game_name}** • $${p.price.toFixed(2)} • ${spotsLabel(spots)}${threadLink}`;
+      const spotsText = spots?.unlimited
+        ? `${spots.claimed} claimed / ${spots.verified} verified`
+        : `${spots.claimed}/${spots.total} claimed • ${spots.verified} verified • ${spots.remaining} remaining`;
+      return `**#${p.id}** — ${p.game_name} — $${p.price.toFixed(2)} — ${spotsText}`;
     });
 
     const embed = new EmbedBuilder()
-      .setColor(0xe91e63)
-      .setTitle('🛒 Open Preorders')
+      .setColor(0x3498db)
+      .setTitle('📋 Open Preorders')
       .setDescription(lines.join('\n'))
-      .setFooter({ text: `${preorders.length} open preorder${preorders.length !== 1 ? 's' : ''}` })
       .setTimestamp();
 
-    return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 
-  if (sub === 'close') {
+  /* ───────── CLOSE ───────── */
+  else if (sub === 'close') {
     const id = interaction.options.getInteger('id');
     const preorder = getPreorder(id);
-    if (!preorder) return interaction.reply({ content: `Preorder #${id} not found.`, flags: MessageFlags.Ephemeral });
+    if (!preorder) {
+      return interaction.reply({ content: `Preorder **#${id}** not found.`, flags: MessageFlags.Ephemeral });
+    }
 
-    const spots = getPreorderSpots(id);
-    const claims = getClaimsForPreorder(id);
-
-    // Delete the forum thread if it exists
+    // Delete the forum post if it exists
     if (preorder.thread_id) {
       try {
         const thread = await interaction.client.channels.fetch(preorder.thread_id).catch(() => null);
@@ -307,167 +218,46 @@ export async function execute(interaction) {
       } catch {}
     }
 
-    // Log before deleting
-    logPreorderStatus({ preorderId: id, gameName: preorder.game_name, action: 'closed', actor: interaction.user.id, spotsInfo: spots }).catch(() => {});
-
-    // Delete the preorder and all claims from DB
     deletePreorder(id);
 
-    // DM users that the preorder was cancelled
-    for (const claim of claims) {
-      try {
-        const user = await interaction.client.users.fetch(claim.user_id).catch(() => null);
-        if (user) {
-          await user.send({
-            embeds: [
-              new EmbedBuilder()
-                .setColor(0xed4245)
-                .setTitle('🗑️ Preorder Cancelled')
-                .setDescription(`Preorder **#${id}** for **${preorder.game_name}** has been cancelled and removed by staff.`)
-                .setTimestamp(),
-            ],
-          }).catch(() => {});
-        }
-      } catch {}
-    }
+    const embed = new EmbedBuilder()
+      .setColor(0xed4245)
+      .setTitle('🗑️ Preorder Deleted')
+      .setDescription(`Preorder **#${id}** (${preorder.game_name}) and its forum post have been deleted.`)
+      .setTimestamp();
 
-    return interaction.reply({
-      content: `🗑️ Preorder **#${id}** (${preorder.game_name}) has been **deleted**. Forum post removed, ${claims.length} claim${claims.length !== 1 ? 's' : ''} cleared.`,
-      flags: MessageFlags.Ephemeral,
-    });
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+
+    logPreorderStatus({
+      preorderId: id,
+      gameName: preorder.game_name,
+      action: 'deleted',
+      actor: interaction.user.id,
+      spotsInfo: null,
+    }).catch(() => {});
   }
 
-  if (sub === 'fulfill') {
+  /* ───────── FULFILL ───────── */
+  else if (sub === 'fulfill') {
     const id = interaction.options.getInteger('id');
     const preorder = getPreorder(id);
-    if (!preorder) return interaction.reply({ content: `Preorder #${id} not found.`, flags: MessageFlags.Ephemeral });
-
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-    fulfillPreorder(id);
-    const claims = getClaimsForPreorder(id);
-    const verifiedClaims = claims.filter((c) => c.verified === 1);
-
-    if (verifiedClaims.length === 0) {
-      const spots = getPreorderSpots(id);
-      logPreorderStatus({ preorderId: id, gameName: preorder.game_name, action: 'fulfilled', actor: interaction.user.id, spotsInfo: spots }).catch(() => {});
-      return interaction.editReply({ content: `✅ Preorder **#${id}** (${preorder.game_name}) marked as **fulfilled**, but no verified users — no tickets created.` });
+    if (!preorder) {
+      return interaction.reply({ content: `Preorder **#${id}** not found.`, flags: MessageFlags.Ephemeral });
     }
 
-    // Get activators for this game (if appId is set)
-    const gameAppId = preorder.game_app_id;
-    const activators = gameAppId ? getActivatorsForGame(gameAppId) : [];
-    const availableActivators = activators.filter((a) => !isAway(a.activator_id));
-    const best = gameAppId ? getBestActivator(gameAppId) : null;
+    const claims = getClaimsForPreorder(id);
+    const verified = claims.filter((c) => c.verified === 1);
 
-    let ticketsCreated = 0;
-    let dmCount = 0;
+    if (verified.length === 0) {
+      return interaction.reply({ content: `No verified users for preorder **#${id}**. Nothing to fulfill.`, flags: MessageFlags.Ephemeral });
+    }
 
-    for (const claim of verifiedClaims) {
+    fulfillPreorder(id);
+
+    // DM all verified users
+    let dmSuccess = 0;
+    for (const claim of verified) {
       try {
-        // Create a request in the DB (like normal activation)
-        const gameName = preorder.game_name;
-        const requestId = createRequest(claim.user_id, gameAppId || 0, gameName);
-
-        // Create a ticket channel
-        if (config.ticketCategoryId && interaction.guild) {
-          const overwrites = [
-            { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-            { id: claim.user_id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
-          ];
-          if (config.activatorRoleId) {
-            overwrites.push({
-              id: config.activatorRoleId,
-              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
-            });
-          }
-
-          const ticketRef = `#${requestId.slice(0, 8).toUpperCase()}`;
-          const channelName = `preorder-${gameName.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 25)}-${requestId.slice(0, 8)}`;
-
-          const ticketChannel = await interaction.guild.channels.create({
-            name: channelName,
-            type: ChannelType.GuildText,
-            parent: config.ticketCategoryId,
-            permissionOverwrites: overwrites,
-          });
-
-          setTicketChannel(requestId, ticketChannel.id);
-
-          // Try auto-assign
-          let autoAssigned = false;
-          if (best) {
-            const result = assignIssuer(requestId, best.activator_id);
-            if (result.ok) autoAssigned = true;
-          }
-
-          const hasAutomated = autoAssigned ? !!getCredentials(best.activator_id, gameAppId) : false;
-
-          const ticketEmbed = new EmbedBuilder()
-            .setColor(0xe91e63)
-            .setTitle(`🛒 Preorder Activation: ${gameName}`)
-            .setDescription(
-              [
-                `**Requester:** <@${claim.user_id}>`,
-                autoAssigned ? `**Auto-assigned to:** <@${best.activator_id}>` : '',
-                '',
-                `This ticket was created from **Preorder #${id}** — the user has a **verified donation**.`,
-                '',
-                autoAssigned
-                  ? (hasAutomated
-                    ? '**Automatic:** Use **Get code automatically** (enter 2FA). **Manual:** Use **Done** to paste the code.'
-                    : 'Use **Done** to enter the auth code from drm.steam.run.')
-                  : 'First activator to press the button claims this request.',
-              ].filter(Boolean).join('\n')
-            )
-            .addFields(
-              { name: '📋 Status', value: autoAssigned ? 'Auto-assigned — awaiting screenshot' : 'Waiting for activator', inline: true },
-              { name: '🛒 Preorder', value: `#${id}`, inline: true },
-            )
-            .setFooter({ text: `Ticket ${ticketRef} • Preorder fulfillment` })
-            .setTimestamp();
-
-          const actionComponents = [];
-          if (autoAssigned) {
-            if (hasAutomated) {
-              actionComponents.push(
-                new ButtonBuilder().setCustomId(`auto_code:${requestId}`).setLabel('Get code automatically').setStyle(ButtonStyle.Primary).setEmoji('⚡')
-              );
-            }
-            actionComponents.push(
-              new ButtonBuilder().setCustomId('done_request').setLabel('Done – enter auth code').setStyle(ButtonStyle.Success),
-              new ButtonBuilder().setCustomId('call_activator').setLabel('Help').setStyle(ButtonStyle.Secondary),
-              new ButtonBuilder().setCustomId('close_ticket').setLabel('Close ticket').setStyle(ButtonStyle.Secondary),
-            );
-          } else {
-            const activatorMentions = (availableActivators.length > 0 ? availableActivators : activators)
-              .map((a) => `<@${a.activator_id}>`).join(' ');
-            if (activatorMentions) ticketEmbed.setDescription(ticketEmbed.data.description + `\n\n${activatorMentions}`);
-            actionComponents.push(
-              new ButtonBuilder().setCustomId(`claim_request:${requestId}`).setLabel('I\'ll handle this').setStyle(ButtonStyle.Success),
-              new ButtonBuilder().setCustomId('close_ticket').setLabel('Close ticket').setStyle(ButtonStyle.Secondary),
-            );
-          }
-
-          await ticketChannel.send({
-            embeds: [ticketEmbed],
-            components: [new ActionRowBuilder().addComponents(actionComponents)],
-          });
-
-          ticketsCreated++;
-
-          // Notify activators
-          if (!autoAssigned) {
-            notifyActivators(interaction.client, {
-              gameName,
-              gameAppId: gameAppId || 0,
-              buyerId: claim.user_id,
-              ticketChannelId: ticketChannel.id,
-            }, availableActivators).catch(() => {});
-          }
-        }
-
-        // DM the user
         const user = await interaction.client.users.fetch(claim.user_id).catch(() => null);
         if (user) {
           await user.send({
@@ -476,23 +266,23 @@ export async function execute(interaction) {
                 .setColor(0x57f287)
                 .setTitle('🎉 Preorder Fulfilled!')
                 .setDescription(
-                  `Your preorder for **${preorder.game_name}** has been fulfilled! A ticket has been created for your activation.`
+                  [
+                    `Your preorder **#${id}** for **${preorder.game_name}** has been fulfilled!`,
+                    '',
+                    'An activator will contact you shortly to complete your activation.',
+                    'Please be ready to provide your Steam credentials when asked.',
+                  ].join('\n')
                 )
                 .setFooter({ text: `Preorder #${id}` })
                 .setTimestamp(),
             ],
           }).catch(() => {});
-          dmCount++;
+          dmSuccess++;
         }
-      } catch (err) {
-        // Continue with other users even if one fails
-      }
+      } catch {}
     }
 
-    const spots = getPreorderSpots(id);
-    logPreorderStatus({ preorderId: id, gameName: preorder.game_name, action: 'fulfilled', actor: interaction.user.id, spotsInfo: spots }).catch(() => {});
-
-    // Close the forum thread
+    // Notify the forum thread
     if (preorder.thread_id) {
       try {
         const thread = await interaction.client.channels.fetch(preorder.thread_id).catch(() => null);
@@ -501,60 +291,114 @@ export async function execute(interaction) {
             embeds: [
               new EmbedBuilder()
                 .setColor(0x57f287)
-                .setTitle('🎉 Preorder Fulfilled!')
-                .setDescription(`This preorder has been fulfilled! **${ticketsCreated}** activation ticket${ticketsCreated !== 1 ? 's' : ''} created.`)
+                .setTitle('✅ Preorder Fulfilled!')
+                .setDescription(`This preorder has been fulfilled! All **${verified.length}** verified users have been notified.`)
                 .setTimestamp(),
             ],
           });
-          await thread.setLocked(true).catch(() => {});
-          await thread.setArchived(true).catch(() => {});
         }
       } catch {}
     }
 
-    return interaction.editReply({
-      content: `✅ Preorder **#${id}** (${preorder.game_name}) **fulfilled**. Created **${ticketsCreated}** ticket${ticketsCreated !== 1 ? 's' : ''}, notified **${dmCount}** user${dmCount !== 1 ? 's' : ''}.`,
-    });
+    const embed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle('✅ Preorder Fulfilled')
+      .setDescription(`Preorder **#${id}** (${preorder.game_name}) — DM'd **${dmSuccess}/${verified.length}** verified users.`)
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+
+    logPreorderStatus({
+      preorderId: id,
+      gameName: preorder.game_name,
+      action: 'fulfilled',
+      actor: interaction.user.id,
+      spotsInfo: getPreorderSpots(id),
+    }).catch(() => {});
   }
 
-  if (sub === 'refill') {
+  /* ───────── REFILL ───────── */
+  else if (sub === 'refill') {
     const id = interaction.options.getInteger('id');
-    const newSpots = interaction.options.getInteger('spots') ?? null;
+    const newSpots = interaction.options.getInteger('spots');
     const preorder = getPreorder(id);
-    if (!preorder) return interaction.reply({ content: `Preorder #${id} not found.`, flags: MessageFlags.Ephemeral });
-    if (preorder.status === 'open') return interaction.reply({ content: `Preorder #${id} is already open.`, flags: MessageFlags.Ephemeral });
-
-    refillPreorder(id, newSpots);
-    const spots = getPreorderSpots(id);
-
-    // Update the forum post if it exists
-    if (preorder.thread_id) {
-      try {
-        const thread = await interaction.client.channels.fetch(preorder.thread_id).catch(() => null);
-        if (thread) {
-          // Unarchive if archived
-          if (thread.archived) await thread.setArchived(false).catch(() => {});
-          if (thread.locked) await thread.setLocked(false).catch(() => {});
-          const spotsText = spots?.unlimited ? 'Unlimited spots' : `**${spots?.remaining}** spots remaining`;
-          await thread.send({
-            embeds: [
-              new EmbedBuilder()
-                .setColor(0x9b59b6)
-                .setTitle('🔄 Preorder Refilled!')
-                .setDescription(`This preorder has been **reopened**!\n\n🎟️ ${spotsText}\n💰 Minimum donation: **$${preorder.price.toFixed(2)}**\n\nClick the claim button on the first message to reserve your spot.`)
-                .setTimestamp(),
-            ],
-          });
-        }
-      } catch {}
+    if (!preorder) {
+      return interaction.reply({ content: `Preorder **#${id}** not found.`, flags: MessageFlags.Ephemeral });
     }
 
-    logPreorderStatus({ preorderId: id, gameName: preorder.game_name, action: 'refilled', actor: interaction.user.id, spotsInfo: spots }).catch(() => {});
+    refillPreorder(id, newSpots);
 
-    const spotsText = newSpots !== null ? ` with ${newSpots === 0 ? 'unlimited' : newSpots} spots` : '';
-    return interaction.reply({
-      content: `✅ Preorder **#${id}** (${preorder.game_name}) has been **refilled** and is open again${spotsText}. ${spotsLabel(spots)}`,
-      flags: MessageFlags.Ephemeral,
-    });
+    const embed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle('🔄 Preorder Refilled')
+      .setDescription(
+        [
+          `Preorder **#${id}** (${preorder.game_name}) has been reopened.`,
+          newSpots != null ? `New max spots: **${newSpots}**` : 'Max spots unchanged.',
+        ].join('\n')
+      )
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+
+    logPreorderStatus({
+      preorderId: id,
+      gameName: preorder.game_name,
+      action: 'refilled',
+      actor: interaction.user.id,
+      spotsInfo: getPreorderSpots(id),
+    }).catch(() => {});
+  }
+
+  /* ───────── GUIDE ───────── */
+  else if (sub === 'guide') {
+    if (!config.preorderChannelId) {
+      return interaction.reply({ content: 'PREORDER_CHANNEL_ID is not set. Configure it in `.env`.', flags: MessageFlags.Ephemeral });
+    }
+
+    try {
+      const channel = await interaction.client.channels.fetch(config.preorderChannelId);
+      if (!channel || channel.type !== ChannelType.GuildForum) {
+        return interaction.reply({ content: 'Preorder channel must be a Forum channel.', flags: MessageFlags.Ephemeral });
+      }
+
+      const guideEmbed = new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle('📖 Preorder Guide')
+        .setDescription(
+          [
+            '**How the preorder system works:**',
+            '',
+            '1. **Reserve your spot** — Click the "Reserve Spot" button on any open preorder',
+            '2. **Donate on Ko-fi** — Send the listed amount to our [Ko-fi page](' + config.kofiUrl + ')',
+            '3. **Post proof** — Screenshot your Ko-fi receipt and post it in the tip verification channel',
+            '4. **Include the preorder number** — Put `#ID` in your message (e.g. `#5`)',
+            '5. **Auto-verification** — The bot reads your screenshot and confirms your spot',
+            '6. **Fulfillment** — When the game is ready, all verified users get notified',
+            '',
+            '**Important notes:**',
+            '• Your spot is reserved when you click the button, but **must be verified within 48 hours**',
+            '• Unverified spots may be released to other users',
+            '• Ko-fi tier members get price discounts (Mid: 10%, High: 20%)',
+            '• If auto-verification fails, staff will manually review your proof',
+          ].join('\n')
+        )
+        .setFooter({ text: 'DenuBrew Preorder System' })
+        .setTimestamp();
+
+      const guidePost = await channel.threads.create({
+        name: '📖 Guide — How Preorders Work',
+        autoArchiveDuration: 10080,
+        message: { embeds: [guideEmbed] },
+      });
+
+      // Lock the thread so nobody can reply
+      await guidePost.setLocked(true).catch(() => {});
+      await guidePost.pin().catch(() => {});
+
+      await interaction.reply({ content: `Guide posted and locked: <#${guidePost.id}>`, flags: MessageFlags.Ephemeral });
+    } catch (err) {
+      await interaction.reply({ content: `Failed to create guide: ${err.message}`, flags: MessageFlags.Ephemeral });
+    }
   }
 }

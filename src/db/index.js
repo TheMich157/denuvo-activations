@@ -404,6 +404,43 @@ export async function initDb() {
       )
     `);
   } catch {}
+  // Ban appeals
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS ban_appeals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'denied')),
+        reviewed_by TEXT,
+        review_note TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        reviewed_at TEXT
+      )
+    `);
+  } catch {}
+  // User notes (staff)
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS user_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        note TEXT NOT NULL,
+        added_by TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
+  // Cooldown skip tokens
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS skip_tokens (
+        user_id TEXT NOT NULL,
+        tokens INTEGER DEFAULT 0,
+        PRIMARY KEY(user_id)
+      )
+    `);
+  } catch {}
   return db;
 }
 

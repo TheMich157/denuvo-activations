@@ -1,5 +1,6 @@
-import { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
+import { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, MessageFlags, Collection } from 'discord.js';
 import { config } from '../config.js';
+import { loggingConfig } from '../config/logging.js';
 
 /**
  * Verification quiz questions.
@@ -96,47 +97,98 @@ const QUESTIONS = [
   },
 ];
 
-// Active verification sessions: Map<userId, { questions, currentIndex, score, channelId, guildId }>
+// Active verification sessions: Map<userId, { questions, currentIndex, score, channelId, guildId, messageIds[] }>
 const sessions = new Map();
 
-/**
- * Pick N random questions from the pool.
- */
 function pickQuestions(count = 3) {
   const shuffled = [...QUESTIONS].sort(() => Math.random() - 0.5);
   return shuffled.slice(0, Math.min(count, shuffled.length));
 }
 
 /**
+ * Send a verification log to the log channel.
+ */
+async function logVerification(client, { userId, passed, score, total, tag }) {
+  if (!loggingConfig.logChannelId) return;
+  try {
+    const logChannel = await client.channels.fetch(loggingConfig.logChannelId).catch(() => null);
+    if (!logChannel?.send) return;
+    const embed = new EmbedBuilder()
+      .setColor(passed ? 0x57f287 : 0xed4245)
+      .setTitle(passed ? '✅ Verification Passed' : '❌ Verification Failed')
+      .addFields(
+        { name: 'User', value: `<@${userId}> (${tag || userId})`, inline: true },
+        { name: 'Score', value: `**${score}/${total}**`, inline: true },
+        { name: 'Result', value: passed ? 'Verified — roles updated' : 'Failed — must retry', inline: true },
+      )
+      .setTimestamp();
+    await logChannel.send({ embeds: [embed] });
+  } catch {}
+}
+
+/**
+ * Bulk-delete all tracked quiz messages from the verification channel.
+ */
+async function cleanupQuizMessages(client, channelId, messageIds) {
+  if (!messageIds || messageIds.length === 0) return;
+  try {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) return;
+    if (messageIds.length === 1) {
+      // Single message — just delete it
+      const msg = await channel.messages.fetch(messageIds[0]).catch(() => null);
+      if (msg?.deletable) await msg.delete().catch(() => {});
+    } else {
+      // Bulk delete (only works for messages < 14 days old, max 100)
+      // Split into chunks of 100
+      for (let i = 0; i < messageIds.length; i += 100) {
+        const batch = messageIds.slice(i, i + 100);
+        await channel.bulkDelete(batch).catch(async () => {
+          // Fallback: delete one by one if bulk fails
+          for (const id of batch) {
+            const msg = await channel.messages.fetch(id).catch(() => null);
+            if (msg?.deletable) await msg.delete().catch(() => {});
+          }
+        });
+      }
+    }
+  } catch {}
+}
+
+/**
  * Handle a bot mention in the verification channel.
- * Called from the message handler when a user @mentions the bot
- * in the configured verification channel.
  */
 export async function startVerificationInChannel(message) {
   const userId = message.author.id;
   const member = message.member;
 
-  // Already verified — has verified role
+  // Already verified
   if (config.verifiedRoleId && member?.roles?.cache?.has(config.verifiedRoleId)) {
     const reply = await message.reply({ content: '✅ You\'re already verified!' });
-    setTimeout(() => reply.delete().catch(() => {}), 5000);
+    setTimeout(() => { reply.delete().catch(() => {}); message.delete().catch(() => {}); }, 5000);
     return;
   }
 
   // Already has an active session
   if (sessions.has(userId)) {
     const reply = await message.reply({ content: '⏳ You already have an active verification quiz! Answer the questions above.' });
-    setTimeout(() => reply.delete().catch(() => {}), 5000);
+    setTimeout(() => { reply.delete().catch(() => {}); message.delete().catch(() => {}); }, 5000);
     return;
   }
 
   const questions = pickQuestions(3);
+  const messageIds = [];
+
+  // Track the user's trigger message
+  messageIds.push(message.id);
+
   sessions.set(userId, {
     questions,
     currentIndex: 0,
     score: 0,
     channelId: message.channel.id,
     guildId: message.guild.id,
+    messageIds,
   });
 
   const welcomeEmbed = new EmbedBuilder()
@@ -153,7 +205,9 @@ export async function startVerificationInChannel(message) {
     .setFooter({ text: 'Use the dropdown below each question to answer' })
     .setTimestamp();
 
-  await message.channel.send({ content: `<@${userId}>`, embeds: [welcomeEmbed] });
+  const welcomeMsg = await message.channel.send({ content: `<@${userId}>`, embeds: [welcomeEmbed] });
+  messageIds.push(welcomeMsg.id);
+
   await sendQuestion(message.channel, userId);
 }
 
@@ -174,7 +228,6 @@ async function sendQuestion(channel, userId) {
     .setDescription(`<@${userId}>, ${q.question}`)
     .setFooter({ text: 'Select your answer from the dropdown below' });
 
-  // Shuffle the options for display
   const shuffledOptions = [...q.options].sort(() => Math.random() - 0.5);
 
   const row = new ActionRowBuilder().addComponents(
@@ -184,12 +237,12 @@ async function sendQuestion(channel, userId) {
       .addOptions(shuffledOptions.map((o) => ({ label: o.label, value: o.value })))
   );
 
-  await channel.send({ embeds: [embed], components: [row] });
+  const msg = await channel.send({ embeds: [embed], components: [row] });
+  session.messageIds.push(msg.id);
 }
 
 /**
  * Handle a verification answer from the dropdown.
- * @returns {boolean} true if handled
  */
 export async function handleVerifyAnswer(interaction) {
   if (!interaction.isStringSelectMenu()) return false;
@@ -199,7 +252,6 @@ export async function handleVerifyAnswer(interaction) {
   const userId = parts[1];
   const questionId = parts[2];
 
-  // Only the quiz taker can answer
   if (interaction.user.id !== userId) {
     await interaction.reply({ content: 'This isn\'t your quiz!', flags: MessageFlags.Ephemeral });
     return true;
@@ -226,9 +278,10 @@ export async function handleVerifyAnswer(interaction) {
 
   session.currentIndex++;
 
-  // Check if quiz is complete
+  // Quiz complete?
   if (session.currentIndex >= session.questions.length) {
     const passed = session.score === session.questions.length;
+    const userTag = interaction.user.tag || interaction.user.username;
 
     if (passed) {
       const successEmbed = new EmbedBuilder()
@@ -238,11 +291,6 @@ export async function handleVerifyAnswer(interaction) {
           `<@${userId}> answered all **${session.questions.length}/${session.questions.length}** questions correctly!`,
           '',
           'Welcome to the server! You now have full access.',
-          '',
-          '**Quick start:**',
-          '• Use the **ticket panel** or `/activate` to request an activation',
-          '• Check `/profile` to see your account',
-          '• Support us on Ko-fi for priority perks!',
         ].join('\n'))
         .setTimestamp();
 
@@ -270,6 +318,21 @@ export async function handleVerifyAnswer(interaction) {
       } catch (e) {
         console.error('[Verify] Role assignment error:', e.message);
       }
+
+      // Log success
+      logVerification(interaction.client, { userId, passed: true, score: session.score, total: session.questions.length, tag: userTag }).catch(() => {});
+
+      // Clean up all quiz messages after a short delay so the user sees the success message
+      const channelId = session.channelId;
+      const msgIds = [...session.messageIds];
+      // The interaction.message.id is the last answer message — include it
+      if (interaction.message?.id && !msgIds.includes(interaction.message.id)) {
+        msgIds.push(interaction.message.id);
+      }
+      setTimeout(() => {
+        cleanupQuizMessages(interaction.client, channelId, msgIds).catch(() => {});
+      }, 8000);
+
     } else {
       const failEmbed = new EmbedBuilder()
         .setColor(0xed4245)
@@ -289,6 +352,9 @@ export async function handleVerifyAnswer(interaction) {
       );
 
       await interaction.update({ embeds: [failEmbed], components: [retryRow] });
+
+      // Log failure
+      logVerification(interaction.client, { userId, passed: false, score: session.score, total: session.questions.length, tag: userTag }).catch(() => {});
     }
 
     sessions.delete(userId);
@@ -307,7 +373,6 @@ export async function handleVerifyAnswer(interaction) {
 
   await interaction.update({ embeds: [progressEmbed], components: [] });
 
-  // Send next question after a brief moment
   setTimeout(async () => {
     try {
       const channel = await interaction.client.channels.fetch(session.channelId).catch(() => null);
@@ -331,10 +396,16 @@ export async function handleVerifyRetry(interaction) {
     return true;
   }
 
+  // Clean up the fail/retry message
+  const oldMsgId = interaction.message?.id;
+
   const questions = pickQuestions(3);
   const guildId = interaction.guild?.id || interaction.client.guilds.cache.first()?.id;
   const channelId = interaction.channel?.id || config.verifyChannelId;
-  sessions.set(userId, { questions, currentIndex: 0, score: 0, channelId, guildId });
+  const messageIds = [];
+  if (oldMsgId) messageIds.push(oldMsgId);
+
+  sessions.set(userId, { questions, currentIndex: 0, score: 0, channelId, guildId, messageIds });
 
   const embed = new EmbedBuilder()
     .setColor(0x3498db)

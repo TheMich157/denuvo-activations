@@ -19,6 +19,8 @@ import {
   import { isAway } from './activatorStatus.js';
   import { notifyActivators } from './statusNotify.js';
   import { getUserTierInfo, getAdjustedCooldown, TIERS } from './tiers.js';
+  import { getTokens, useToken } from './skipTokens.js';
+  import { db } from '../db/index.js';
   
   export async function createTicketForGame(interaction, appId, options = {}) {
     const { requireTicketCategory = false } = options;
@@ -50,28 +52,38 @@ import {
   
     const cooldownUntil = isActivator(interaction.member) ? null : checkCooldown(interaction.user.id, game.appId);
     const tierInfo = getUserTierInfo(interaction.user.id);
-    if (cooldownUntil && tierInfo.tier !== 'none') {
-      // Tier members get reduced cooldown
-      const baseCd = getCooldownHours(game.appId);
-      const adjustedCd = getAdjustedCooldown(baseCd, interaction.user.id);
-      const adjustedEnd = Date.now() - ((baseCd - adjustedCd) * 3600000);
-      if (cooldownUntil > adjustedEnd) {
-        const mins = Math.ceil((cooldownUntil - (baseCd - adjustedCd) * 3600000 - Date.now()) / 60000);
-        if (mins > 0) {
-          return {
-            ok: false,
-            error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${adjustedCd}h — ${TIERS[tierInfo.tier].emoji} tier benefit).`,
-          };
+    let usedSkipToken = false;
+    if (cooldownUntil) {
+      // Check for skip token first
+      const hasSkipToken = getTokens(interaction.user.id) > 0;
+      if (hasSkipToken) {
+        useToken(interaction.user.id);
+        usedSkipToken = true;
+        // Skip the cooldown entirely
+      } else if (tierInfo.tier !== 'none') {
+        // Tier members get reduced cooldown
+        const baseCd = getCooldownHours(game.appId);
+        const adjustedCd = getAdjustedCooldown(baseCd, interaction.user.id);
+        const adjustedEnd = Date.now() - ((baseCd - adjustedCd) * 3600000);
+        if (cooldownUntil > adjustedEnd) {
+          const mins = Math.ceil((cooldownUntil - (baseCd - adjustedCd) * 3600000 - Date.now()) / 60000);
+          if (mins > 0) {
+            return {
+              ok: false,
+              error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${adjustedCd}h — ${TIERS[tierInfo.tier].emoji} tier benefit).`,
+            };
+          }
         }
+        // If adjusted cooldown has passed, allow through
+      } else {
+        const mins = Math.ceil((cooldownUntil - Date.now()) / 60000);
+        const hoursLabel = getCooldownHours(game.appId) === 48 ? '48 hours (high demand)' : '24 hours';
+        const tokenHint = `\n> 💡 Buy a **skip token** with \`/skiptoken buy\` to bypass cooldowns!`;
+        return {
+          ok: false,
+          error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${hoursLabel}).${tokenHint}`,
+        };
       }
-      // If adjusted cooldown has passed, allow through
-    } else if (cooldownUntil) {
-      const mins = Math.ceil((cooldownUntil - Date.now()) / 60000);
-      const hoursLabel = getCooldownHours(game.appId) === 48 ? '48 hours (high demand)' : '24 hours';
-      return {
-        ok: false,
-        error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${hoursLabel}).`,
-      };
     }
   
     // Queue priority: VIP users (whitelisted + high points) OR tier members get a priority tag
@@ -79,7 +91,14 @@ import {
     const isVip = (isWhitelisted(interaction.user.id) && buyerPoints >= 100) || tierInfo.tier !== 'none';
 
     const requestId = createRequest(interaction.user.id, game.appId, game.name);
-  
+
+    // Calculate queue position
+    const queuePosition = db.prepare(`
+      SELECT COUNT(*) AS n FROM requests WHERE status IN ('pending', 'in_progress') AND created_at <= (
+        SELECT created_at FROM requests WHERE id = ?
+      )
+    `).get(requestId)?.n ?? 1;
+
     const overwrites = [
       { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
       { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
@@ -203,8 +222,16 @@ import {
       components,
     };
   
+    // Build extra info line for skip token / queue
+    const extraLines = [];
+    if (usedSkipToken) extraLines.push('⚡ **Skip token used** — cooldown bypassed!');
+    if (queuePosition > 1) extraLines.push(`📊 **Queue position:** #${queuePosition}`);
+
     if (ticketChannel) {
       await ticketChannel.send(msg);
+      if (extraLines.length > 0) {
+        await ticketChannel.send({ content: extraLines.join('\n') }).catch(() => {});
+      }
       // DM activators who have this game (not away)
       notifyActivators(interaction.client, {
         gameName: getGameDisplayName(game),
@@ -212,8 +239,8 @@ import {
         buyerId: interaction.user.id,
         ticketChannelId: ticketChannel.id,
       }, availableActivators).catch(() => {});
-      return { ok: true, channel: ticketChannel };
+      return { ok: true, channel: ticketChannel, queuePosition, usedSkipToken };
     }
-    return { ok: true, message: msg };
+    return { ok: true, message: msg, queuePosition, usedSkipToken };
   }
   

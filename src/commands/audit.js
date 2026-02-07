@@ -7,6 +7,9 @@ import { isBlacklisted } from '../services/blacklist.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { getActivatorRating, formatStars } from '../services/ratings.js';
+import { getNotes } from '../services/notes.js';
+import { getTokens } from '../services/skipTokens.js';
+import { getUserAppeals } from '../services/appeals.js';
 
 export const data = new SlashCommandBuilder()
   .setName('audit')
@@ -99,6 +102,30 @@ export async function execute(interaction) {
       { name: '⚠️ Recent Warnings', value: warnLines, inline: false },
     )
     .setTimestamp();
+
+  // Skip tokens
+  const skipTokens = getTokens(uid);
+  if (skipTokens > 0) embed.addFields({ name: '⚡ Skip Tokens', value: `**${skipTokens}**`, inline: true });
+
+  // Staff notes
+  const notes = getNotes(uid);
+  if (notes.length > 0) {
+    const noteLines = notes.slice(0, 5).map((n) => {
+      const date = new Date(n.created_at + 'Z');
+      return `**#${n.id}** ${n.note.slice(0, 80)} — <@${n.added_by}> <t:${Math.floor(date.getTime() / 1000)}:R>`;
+    }).join('\n');
+    embed.addFields({ name: `📝 Staff Notes (${notes.length})`, value: noteLines, inline: false });
+  }
+
+  // Appeals
+  const appeals = getUserAppeals(uid);
+  if (appeals.length > 0) {
+    const appealLines = appeals.slice(0, 3).map((a) => {
+      const statusEmoji = a.status === 'approved' ? '✅' : a.status === 'denied' ? '❌' : '⏳';
+      return `${statusEmoji} **#${a.id}** ${a.status} — ${a.reason.slice(0, 60)}`;
+    }).join('\n');
+    embed.addFields({ name: `📋 Appeals (${appeals.length})`, value: appealLines, inline: false });
+  }
 
   return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
 }

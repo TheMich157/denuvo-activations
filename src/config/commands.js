@@ -19,4 +19,6 @@ export const ACTIVATOR_COMMANDS = [
   'audit',
   'info',
   'schedule',
+  'note',
+  'skiptoken',
 ];
