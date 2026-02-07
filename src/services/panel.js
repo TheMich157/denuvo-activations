@@ -36,6 +36,64 @@ export function clearClosedInfo() {
   closedInfo = null;
 }
 
+// ---- Closed message cleanup & reopen timer ----
+
+let reopenTimer = null;
+
+/**
+ * Delete the closed/maintenance message if it exists.
+ */
+export async function deleteClosedMessage(client) {
+  const closed = getClosedInfo();
+  if (!closed?.messageId || !closed?.channelId) { clearClosedInfo(); return; }
+  try {
+    const ch = await client.channels.fetch(closed.channelId).catch(() => null);
+    if (ch?.isTextBased?.()) {
+      const msg = await ch.messages.fetch(closed.messageId).catch(() => null);
+      if (msg?.deletable) await msg.delete();
+    }
+  } catch (err) {
+    log('deleteClosedMessage failed:', err?.message);
+  }
+  clearClosedInfo();
+}
+
+/**
+ * Cancel any pending auto-reopen timer.
+ */
+export function cancelReopenTimer() {
+  if (reopenTimer) { clearTimeout(reopenTimer); reopenTimer = null; }
+}
+
+/**
+ * Schedule auto-reopen after durationMs. When it fires, deletes the maintenance
+ * message and posts a fresh panel.
+ * @param {import('discord.js').Client} client
+ * @param {string} guildId
+ * @param {number} durationMs
+ * @param {() => { embeds: unknown[]; components: unknown[] }} buildPayload - function that builds the panel payload (avoids circular dep)
+ */
+export function scheduleAutoReopen(client, guildId, durationMs, buildPayload) {
+  cancelReopenTimer();
+  reopenTimer = setTimeout(async () => {
+    reopenTimer = null;
+    try {
+      await deleteClosedMessage(client);
+      const closed = getClosedInfo();
+      const channelId = closed?.channelId;
+      clearClosedInfo();
+      if (!channelId) return;
+      const channel = await client.channels.fetch(channelId).catch(() => null);
+      if (!channel?.isTextBased?.()) return;
+      const payload = buildPayload();
+      const msg = await channel.send(payload);
+      setPanel(guildId, channel.id, msg.id);
+    } catch (err) {
+      log('autoReopenPanel failed:', err?.message);
+    }
+  }, durationMs);
+}
+
 /**
  * Sync the panel message with current DB state (stock, games).
  * Call on startup so the panel reflects correct state after bot restart.

@@ -160,6 +160,35 @@ export async function initDb() {
     `);
     sqlDb.exec('CREATE INDEX IF NOT EXISTS idx_restock_queue_at ON stock_restock_queue(restock_at)');
   } catch {}
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS game_waitlist (
+        user_id TEXT NOT NULL,
+        game_app_id INTEGER NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (user_id, game_app_id)
+      )
+    `);
+  } catch {}
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS blacklist (
+        user_id TEXT PRIMARY KEY,
+        reason TEXT,
+        added_by TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS activator_status (
+        activator_id TEXT PRIMARY KEY,
+        away INTEGER DEFAULT 0,
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
   return db;
 }
 

@@ -1,23 +1,39 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
+import { db } from '../db/index.js';
 import { getBalance } from '../services/points.js';
 import { getActivatorGames, getDailyCount, getPendingRestockCount, getNextRestockAt } from '../services/activators.js';
 import { getCooldownsForUser } from '../services/requests.js';
 import { isActivator } from '../utils/activator.js';
+import { isWhitelisted } from '../utils/whitelist.js';
 import { requireGuild } from '../utils/guild.js';
 import { formatPointsAsMoney } from '../utils/pointsFormat.js';
 import { getGameDisplayName, getGameByAppId, getCooldownHours } from '../utils/games.js';
+import { isAway } from '../services/activatorStatus.js';
 import { config } from '../config.js';
+
+const HISTORY_LIMIT = 5;
 
 export const data = new SlashCommandBuilder()
   .setName('profile')
-  .setDescription('View a profile: credits, cooldowns, and (for activators) games list')
-  .setDMPermission(false)
+  .setDescription('View a profile: credits, cooldowns, history, and (for activators) games list')
+  .setContexts(0)
   .addUserOption((o) =>
     o
       .setName('user')
       .setDescription('View this user\'s profile (leave empty for your own)')
       .setRequired(false)
   );
+
+/**
+ * Determine account type label.
+ */
+function getAccountLabel(member, userId) {
+  const activator = member ? isActivator(member) : false;
+  const wl = isWhitelisted(userId);
+  if (activator && wl) return '⭐ **Whitelisted Activator**';
+  if (activator) return '🛠️ **Activator**';
+  return '👤 **User**';
+}
 
 export async function execute(interaction) {
   const guildErr = requireGuild(interaction);
@@ -33,45 +49,60 @@ export async function execute(interaction) {
   const games = activator ? getActivatorGames(userId) : [];
   const restockHours = config.restockHours || 24;
   const cooldowns = getCooldownsForUser(userId);
+  const away = activator && isAway(userId);
 
   const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
+    .setColor(activator ? 0x57f287 : 0x5865f2)
     .setAuthor({
       name: targetUser.displayName || targetUser.username,
       iconURL: targetUser.displayAvatarURL({ size: 64 }),
     })
     .setTitle('Profile')
     .setTimestamp();
+
   const viewedBySuffix = targetUser.id !== interaction.user.id
     ? ` • Viewed by ${interaction.user.displayName || interaction.user.username}`
     : '';
 
+  // —— Account type ——
+  const accountLabel = getAccountLabel(targetMember, userId);
+  const awayTag = away ? ' • 🌙 Away' : '';
+  embed.addFields({
+    name: '👤 Account',
+    value: `${accountLabel}${awayTag}`,
+    inline: true,
+  });
+
   // —— Credits ——
   embed.addFields({
     name: '💰 Credits',
-    value: `**${points}** points (${formatPointsAsMoney(points)})\n*1 point = 1¢ • Use /shop to buy*`,
+    value: `**${points}** pts (${formatPointsAsMoney(points)})`,
     inline: true,
   });
 
-  // —— Account type ——
+  // —— Quick stats ——
+  const completedRow = activator
+    ? db.prepare(`SELECT COUNT(*) AS n FROM requests WHERE issuer_id = ? AND status = 'completed'`).get(userId)
+    : db.prepare(`SELECT COUNT(*) AS n FROM requests WHERE buyer_id = ?`).get(userId);
+  const statCount = completedRow?.n ?? 0;
   embed.addFields({
-    name: '👤 Account',
-    value: activator ? '**Activator** — You can add games and earn points' : '**Member** — Request games via panel or /request',
+    name: activator ? '✅ Activations' : '📋 Requests',
+    value: `**${statCount}**`,
     inline: true,
   });
 
-  // —— Cooldowns (for non-activators or anyone with cooldowns) ——
+  // —— Cooldowns ——
   if (cooldowns.length > 0) {
     const lines = cooldowns.map((c) => {
       const game = getGameByAppId(c.game_app_id);
       const displayName = game ? getGameDisplayName(game) : `App ${c.game_app_id}`;
       const until = new Date(c.cooldown_until).getTime();
       const hrs = getCooldownHours(c.game_app_id);
-      return `• **${displayName}** — <t:${Math.floor(until / 1000)}:R> (${hrs}h cooldown)`;
+      return `• **${displayName}** — <t:${Math.floor(until / 1000)}:R> (${hrs}h)`;
     });
     embed.addFields({
-      name: '⏱️ Your cooldowns',
-      value: lines.join('\n') + '\n*You’ll get a DM when a cooldown applies. Request again after it expires.*',
+      name: '⏱️ Cooldowns',
+      value: lines.join('\n'),
       inline: false,
     });
   }
@@ -98,24 +129,61 @@ export async function execute(interaction) {
       return `• **${displayName}** ${methodLabel} — stock: **${stock}**${restockText} • **${remaining}/${limit}** today`;
     });
     embed.addFields({
-      name: '🎮 Your games (Activator)',
+      name: '🎮 Games',
       value: lines.join('\n'),
       inline: false,
     });
-    embed.setFooter({
-      text: `Stock restocks after ${restockHours}h • ${limit} activations/day • /add or /stock${viewedBySuffix}`,
-    });
   } else if (activator) {
     embed.addFields({
-      name: '🎮 Your games',
-      value: 'No games registered. Use `/add` or `/stock` to add games.',
+      name: '🎮 Games',
+      value: 'No games registered. Use `/add` or `/stock`.',
       inline: false,
     });
-    embed.setFooter({ text: `Activator • Use /add or /stock to add games${viewedBySuffix}` });
-  } else if (cooldowns.length === 0) {
-    embed.setFooter({ text: `Use /shop to buy points • Request games from the panel or /request${viewedBySuffix}` });
-  } else if (viewedBySuffix) {
-    embed.setFooter({ text: viewedBySuffix.slice(3) });
+  }
+
+  // —— Recent history ——
+  const historyColumn = activator ? 'issuer_id' : 'buyer_id';
+  const historyRows = db.prepare(`
+    SELECT game_app_id, game_name, status, created_at, completed_at, points_charged
+    FROM requests
+    WHERE ${historyColumn} = ?
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(userId, HISTORY_LIMIT);
+
+  if (historyRows.length > 0) {
+    const statusEmoji = { completed: '✅', pending: '⏳', in_progress: '🔄', failed: '❌', cancelled: '🚫' };
+    const lines = historyRows.map((r) => {
+      const game = getGameByAppId(r.game_app_id);
+      const name = game ? getGameDisplayName(game) : r.game_name;
+      const emoji = statusEmoji[r.status] ?? '❓';
+      const date = r.completed_at || r.created_at;
+      const ts = date ? `<t:${Math.floor(new Date(date).getTime() / 1000)}:d>` : '—';
+      const pts = r.status === 'completed' && activator ? ` +${r.points_charged}pts` : '';
+      return `${emoji} **${name}** ${ts}${pts}`;
+    });
+
+    const totalRow = db.prepare(
+      `SELECT COUNT(*) AS n FROM requests WHERE ${historyColumn} = ?`
+    ).get(userId);
+    const totalCount = totalRow?.n ?? historyRows.length;
+    const moreText = totalCount > HISTORY_LIMIT ? `\n*… and ${totalCount - HISTORY_LIMIT} more*` : '';
+
+    embed.addFields({
+      name: activator ? '📜 Recent activations' : '📜 Recent requests',
+      value: lines.join('\n') + moreText,
+      inline: false,
+    });
+  }
+
+  // —— Footer ——
+  const footerParts = [];
+  if (activator && games.length > 0) {
+    footerParts.push(`Restock: ${restockHours}h • ${config.dailyActivationLimit}/day`);
+  }
+  if (viewedBySuffix) footerParts.push(viewedBySuffix.slice(3));
+  if (footerParts.length > 0) {
+    embed.setFooter({ text: footerParts.join(' • ') });
   }
 
   await interaction.reply({ embeds: [embed] });

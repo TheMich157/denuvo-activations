@@ -6,7 +6,7 @@ import { requireGuild } from '../utils/guild.js';
 export const data = new SlashCommandBuilder()
   .setName('remove')
   .setDescription('Remove a game from your activator list')
-  .setDMPermission(false)
+  .setContexts(0)
   .addStringOption((o) =>
     o
       .setName('game')

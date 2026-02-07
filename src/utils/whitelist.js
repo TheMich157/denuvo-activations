@@ -6,7 +6,7 @@ import { ACTIVATOR_COMMANDS } from '../config/commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/** Commands only activators can use; whitelist users get profile, request, pricegame, shop, etc. */
+/** Commands only activators can use; whitelist users get profile, pricegame, shop, etc. */
 const ACTIVATOR_ONLY_COMMANDS = ACTIVATOR_COMMANDS;
 
 let cachedIds = null;

@@ -12,6 +12,9 @@ import {
   import { config } from '../config.js';
   import { isValidAppId } from '../utils/validate.js';
   import { isActivator } from '../utils/activator.js';
+  import { isBlacklisted } from './blacklist.js';
+  import { joinWaitlist, isOnWaitlist } from './waitlist.js';
+  import { isAway } from './activatorStatus.js';
   
   export async function createTicketForGame(interaction, appId, options = {}) {
     const { requireTicketCategory = false } = options;
@@ -25,10 +28,20 @@ import {
     if (requireTicketCategory && !config.ticketCategoryId) {
       return { ok: false, error: 'Ticket category not configured. Set TICKET_CATEGORY_ID for the panel.' };
     }
+
+    // Blacklist check — silently block
+    if (isBlacklisted(interaction.user.id)) {
+      return { ok: false, error: 'You are not able to make requests. Contact an admin if you believe this is a mistake.' };
+    }
   
     const activators = getActivatorsForGame(appId);
     if (activators.length === 0) {
-      return { ok: false, error: `**${game.name}** is out of stock. Try again later.` };
+      // Offer waitlist
+      if (!isOnWaitlist(interaction.user.id, appId)) {
+        joinWaitlist(interaction.user.id, appId);
+        return { ok: false, error: `**${getGameDisplayName(game)}** is out of stock. You've been added to the **waitlist** — you'll get a DM when it's back in stock.` };
+      }
+      return { ok: false, error: `**${getGameDisplayName(game)}** is out of stock. You're already on the waitlist — we'll DM you when it's available.` };
     }
   
     const cooldownUntil = isActivator(interaction.member) ? null : checkCooldown(interaction.user.id, game.appId);
@@ -76,7 +89,9 @@ import {
         .setStyle(ButtonStyle.Secondary)
     );
   
-  const activatorMentions = activators.map((a) => `<@${a.activator_id}>`).join(' ');
+  const availableActivators = activators.filter((a) => !isAway(a.activator_id));
+  const activatorMentions = (availableActivators.length > 0 ? availableActivators : activators)
+    .map((a) => `<@${a.activator_id}>`).join(' ');
   const ticketRef = `#${requestId.slice(0, 8).toUpperCase()}`;
 
   const mainEmbed = new EmbedBuilder()

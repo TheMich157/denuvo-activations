@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
-import { getPanel, clearPanel, setClosedInfo, getClosedInfo, clearClosedInfo } from '../services/panel.js';
+import { getPanel, clearPanel, setClosedInfo, scheduleAutoReopen } from '../services/panel.js';
 import { buildPanelMessagePayload } from './ticketpanel.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
@@ -34,7 +34,7 @@ function buildClosedEmbed({ reopenAt, closedBy } = {}) {
   embed.addFields(
     {
       name: '✨ Need to request a game?',
-      value: 'Please wait until the panel is back. You can also use **`/request`** if that command is enabled for your role.',
+      value: 'Please wait until the panel is back up. You\'ll be able to request games again once it\'s active.',
       inline: false,
     },
     {
@@ -66,12 +66,10 @@ function parseDuration(input) {
   return total > 0 ? Math.min(total, 24 * 60 * 60 * 1000) : null; // cap at 24h
 }
 
-let reopenTimer = null;
-
 export const data = new SlashCommandBuilder()
   .setName('closepanel')
   .setDescription('Close the ticket panel for maintenance (Activator only)')
-  .setDMPermission(false)
+  .setContexts(0)
   .addStringOption((o) =>
     o
       .setName('duration')
@@ -116,14 +114,8 @@ export async function execute(interaction) {
   setClosedInfo({ channelId, messageId: closedMsgId, reopenAt });
 
   // Schedule auto-reopen
-  if (reopenTimer) { clearTimeout(reopenTimer); reopenTimer = null; }
   if (reopenAt && durationMs) {
-    reopenTimer = setTimeout(async () => {
-      reopenTimer = null;
-      try {
-        await autoReopenPanel(interaction.client, interaction.guildId);
-      } catch {}
-    }, durationMs);
+    scheduleAutoReopen(interaction.client, interaction.guildId, durationMs, buildPanelMessagePayload);
   }
 
   const timeText = reopenAt
@@ -133,47 +125,4 @@ export async function execute(interaction) {
     content: `🛠️ **Panel closed for maintenance.**${timeText} Use \`/ticketpanel\` to reopen early.`,
     flags: MessageFlags.Ephemeral,
   });
-}
-
-/**
- * Auto-reopen: delete old maintenance message and post a fresh panel.
- */
-async function autoReopenPanel(client, guildId) {
-  await deleteClosedMessage(client);
-  const closed = getClosedInfo();
-  const channelId = closed?.channelId;
-  clearClosedInfo();
-  if (!channelId) return;
-
-  const channel = await client.channels.fetch(channelId).catch(() => null);
-  if (!channel?.isTextBased?.()) return;
-
-  const { setPanel } = await import('../services/panel.js');
-  const payload = buildPanelMessagePayload();
-  const msg = await channel.send(payload);
-  setPanel(guildId, channel.id, msg.id);
-}
-
-/**
- * Delete the closed/maintenance message if it exists.
- * Called both by auto-reopen and by /ticketpanel before posting a new panel.
- */
-export async function deleteClosedMessage(client) {
-  const closed = getClosedInfo();
-  if (!closed?.messageId || !closed?.channelId) { clearClosedInfo(); return; }
-  try {
-    const ch = await client.channels.fetch(closed.channelId).catch(() => null);
-    if (ch?.isTextBased?.()) {
-      const msg = await ch.messages.fetch(closed.messageId).catch(() => null);
-      if (msg?.deletable) await msg.delete();
-    }
-  } catch {}
-  clearClosedInfo();
-}
-
-/**
- * Cancel any pending auto-reopen timer (call when a new panel is posted manually).
- */
-export function cancelReopenTimer() {
-  if (reopenTimer) { clearTimeout(reopenTimer); reopenTimer = null; }
 }

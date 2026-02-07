@@ -6,7 +6,7 @@ import { requireGuild } from '../utils/guild.js';
 export const data = new SlashCommandBuilder()
   .setName('reloadgames')
   .setDescription('Reload game list from list.json (Activator only)')
-  .setDMPermission(false);
+  .setContexts(0);
 
 export async function execute(interaction) {
   const guildErr = requireGuild(interaction);

@@ -9,7 +9,7 @@ import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
 export const data = new SlashCommandBuilder()
   .setName('removestock')
   .setDescription('Remove stock from a game (Activator only)')
-  .setDMPermission(false)
+  .setContexts(0)
   .addStringOption((o) =>
     o
       .setName('game')

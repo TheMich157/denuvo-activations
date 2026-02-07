@@ -17,7 +17,7 @@ function encodeQuery(s) {
 export const data = new SlashCommandBuilder()
   .setName('pricegame')
   .setDescription('Look up Steam or reseller prices for games from the list (whitelisted only)')
-  .setDMPermission(false)
+  .setContexts(0)
   .addStringOption((o) =>
     o
       .setName('game')

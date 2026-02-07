@@ -9,8 +9,8 @@ import {
 } from 'discord.js';
 import { buildStockSelectMenus, getStockCount, getChunkLabel, getGlobalStockStats, getRestockStats } from '../services/stock.js';
 import { getGameDisplayName, getGameByAppId } from '../utils/games.js';
-import { getPanel, setPanel, clearPanel } from '../services/panel.js';
-import { deleteClosedMessage, cancelReopenTimer } from './closepanel.js';
+import { getAvailableActivatorCount, getTotalActivatorCount } from '../services/activatorStatus.js';
+import { getPanel, setPanel, clearPanel, deleteClosedMessage, cancelReopenTimer } from '../services/panel.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
@@ -18,7 +18,7 @@ import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
 export const data = new SlashCommandBuilder()
   .setName('ticketpanel')
   .setDescription('Post the activation ticket panel in this channel (Activator only)')
-  .setDMPermission(false);
+  .setContexts(0);
 
 export function buildPanelComponents() {
   const chunks = buildStockSelectMenus();
@@ -98,6 +98,11 @@ export function buildPanelMessagePayload() {
       {
         name: '🔥 Low stock',
         value: `**${stats.lowStockCount}** games (<10 slots)`,
+        inline: true,
+      },
+      {
+        name: '👥 Activators online',
+        value: `**${getAvailableActivatorCount()}/${getTotalActivatorCount()}** available`,
         inline: true,
       },
       {

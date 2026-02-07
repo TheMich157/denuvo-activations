@@ -9,7 +9,7 @@ import { requireGuild } from '../utils/guild.js';
 export const data = new SlashCommandBuilder()
   .setName('addpoints')
   .setDescription('Add points to a user (Activator only)')
-  .setDMPermission(false)
+  .setContexts(0)
   .addUserOption((o) => o.setName('user').setDescription('User to add points to').setRequired(true))
   .addIntegerOption((o) => o.setName('amount').setDescription('Points to add (1–1,000,000)').setRequired(true).setMinValue(1).setMaxValue(1_000_000))
   .addStringOption((o) => o.setName('reason').setDescription('Reason (e.g. purchase, boost)').setRequired(true));

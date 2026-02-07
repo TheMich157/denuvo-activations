@@ -43,13 +43,17 @@ ENCRYPTION_KEY=64_character_hex_string  # 32 bytes, e.g. openssl rand -hex 32
 | `/stock` | Activators: Quick-add a game to stock (manual only) |
 | `/removestock` | Activators: Remove stock from a game (game + quantity) |
 | `/remove` | Activators: Remove a game from your list |
-| `/request` | Request a game activation (opens ticket, pings activators) |
-| `/profile` | View your profile: credits (points) and, for activators, your games list with stock and restock |
+| `/profile` | View a profile: credits, cooldowns, history, and (for activators) games list. Optional `user` param. |
 | `/shop` | View point packages |
 | `/addpoints` | Activators: Add points to user (for purchases) |
+| `/transfer` | Send points to another user (with confirmation) |
+| `/leaderboard` | Top activators by completions and points (monthly / all-time) |
+| `/stats` | Server-wide activation statistics |
 | `/ticketpanel` | Activators: Post ticket panel (one globally; replaces previous) |
-| `/closepanel` | Activators: Close the ticket panel |
+| `/closepanel` | Activators: Close the panel for maintenance (optional duration for auto-reopen) |
 | `/reloadgames` | Activators: Reload game list from list.json |
+| `/blacklist` | Activators: add/remove/list blacklisted users (blocked from requesting) |
+| `/away` | Activators: Toggle away status (won't be pinged while away) |
 | `/pricegame` | Whitelisted: Look up Steam or reseller prices; optional **source** (Steam / Resellers), **type** (Key / Account / Any); leave game empty for all Steam prices |
 
 **High-demand games** (marked with 🔥 in the list) have a **2-day cooldown** for normal users; other games have a 24h cooldown. Set `"highDemand": true` in `list.json` for a game to use the 2-day cooldown.
@@ -57,7 +61,7 @@ ENCRYPTION_KEY=64_character_hex_string  # 32 bytes, e.g. openssl rand -hex 32
 ## Flow
 
 1. **Activator** uses `/stock` or `/add` → add game to stock (5 activations/day per account, counts add together)
-2. **Buyer** uses panel or `/request` → ticket created, activators pinged
+2. **Buyer** uses the ticket panel → selects game → ticket created, activators pinged
 3. **First activator** to press "I'll handle this" is assigned; ticket becomes visible only to buyer + issuer
 4. Issuer goes to drm.steam.run, extracts auth, fills, submits → gets code
 5. Issuer presses "Done", enters code → embed sent to ticket with copy button; points to issuer
@@ -74,7 +78,7 @@ Optional: `npm install playwright` to enable automated code generation for activ
 ## Safety
 
 - **Input validation** – Discord IDs, app IDs, points amounts, request IDs validated
-- **Rate limiting** – Per-user limits on sensitive commands (`/request`, `/add`, `/addpoints`, panel)
+- **Rate limiting** – Per-user limits on sensitive commands (`/add`, `/addpoints`, panel, `/transfer`)
 - **Error sanitization** – Internal/crypto errors not exposed to users
 - **Race protection** – Transaction used when claiming requests
 - **Credential handling** – Decrypt wrapped in try/catch, no key leakage

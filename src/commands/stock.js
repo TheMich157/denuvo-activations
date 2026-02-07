@@ -3,6 +3,9 @@ import { searchGames, getGameByAppId } from '../utils/games.js';
 import { addActivatorStock } from '../services/activators.js';
 import { getStockCount } from '../services/stock.js';
 import { logRestock } from '../services/activationLog.js';
+import { notifyWaitlistAndClear } from '../services/waitlist.js';
+import { syncPanelMessage } from '../services/panel.js';
+import { buildPanelMessagePayload } from './ticketpanel.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
@@ -10,7 +13,7 @@ import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
 export const data = new SlashCommandBuilder()
   .setName('stock')
   .setDescription('Add a game to your stock (Activator only) – quick add as manual')
-  .setDMPermission(false)
+  .setContexts(0)
   .addStringOption((o) =>
     o
       .setName('game')
@@ -64,4 +67,8 @@ export async function execute(interaction) {
     content: `Added **${quantity}** piece(s) of **${game.name}** to your stock. **${count}** in stock now. Deducts when you press Done and enter the code. Use \`/add\` for automated mode.`,
     flags: MessageFlags.Ephemeral,
   });
+
+  // Auto-refresh panel and notify waitlisted users
+  syncPanelMessage(interaction.client, buildPanelMessagePayload()).catch(() => {});
+  notifyWaitlistAndClear(interaction.client, appId).catch(() => {});
 }

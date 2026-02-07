@@ -11,6 +11,9 @@ import { searchGames, getGameByAppId, getGameDisplayName } from '../utils/games.
 import { addActivatorGame, getActivatorGames } from '../services/activators.js';
 import { getStockCount } from '../services/stock.js';
 import { logRestock } from '../services/activationLog.js';
+import { notifyWaitlistAndClear } from '../services/waitlist.js';
+import { syncPanelMessage } from '../services/panel.js';
+import { buildPanelMessagePayload } from './ticketpanel.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { config } from '../config.js';
@@ -19,7 +22,7 @@ import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
 export const data = new SlashCommandBuilder()
   .setName('add')
   .setDescription('Register a game for activations (Activator only)')
-  .setDMPermission(false)
+  .setContexts(0)
   .addStringOption((o) =>
     o
       .setName('game')
@@ -98,6 +101,8 @@ export async function handleSelect(interaction) {
       content: `Added **${game.name}** as manual activation. **${count}** in stock. You'll be pinged when someone requests it. Stock deducts only when you press Done and enter the code.`,
       components: [],
     });
+    syncPanelMessage(interaction.client, buildPanelMessagePayload()).catch(() => {});
+    notifyWaitlistAndClear(interaction.client, appId).catch(() => {});
     return true;
   }
 
@@ -156,5 +161,7 @@ export async function handleModal(interaction) {
     content: `Added **${game.name}** with automated activation. **${count}** in stock. Credentials stored encrypted. Stock deducts only when you press Done and enter the code.`,
     flags: MessageFlags.Ephemeral,
   });
+  syncPanelMessage(interaction.client, buildPanelMessagePayload()).catch(() => {});
+  notifyWaitlistAndClear(interaction.client, appId).catch(() => {});
   return true;
 }

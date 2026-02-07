@@ -7,4 +7,6 @@ export const ACTIVATOR_COMMANDS = [
   'ticketpanel',
   'closepanel',
   'reloadgames',
+  'blacklist',
+  'away',
 ];

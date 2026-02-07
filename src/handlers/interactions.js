@@ -23,6 +23,7 @@ import { handleSelect as addHandleSelect, handleModal as addHandleModal } from '
 import { handleButton as doneHandleButton, handleModal as doneHandleModal, handleCopyButton as doneHandleCopyButton, handleCodeWorkedButton } from '../commands/done.js';
 import { handleButton as invalidHandleButton } from '../commands/invalid.js';
 import { handleButton as callModHandleButton } from '../commands/call_mod.js';
+import { handleButton as transferHandleButton } from '../commands/transfer.js';
 
 function buildIssuerActionRow(requestId, hasAutomated = false) {
   const components = [
@@ -246,6 +247,7 @@ export async function handle(interaction) {
     doneHandleModal,
     invalidHandleButton,
     callModHandleButton,
+    transferHandleButton,
   ];
   for (const h of handlers) {
     const handled = await h(interaction);
