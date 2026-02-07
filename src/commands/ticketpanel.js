@@ -80,7 +80,7 @@ export function buildPanelMessagePayload() {
 
   const embed = new EmbedBuilder()
     .setColor(0x1b2838)
-    .setTitle('🎮 Game Activation Center')
+    .setTitle('🎮 DenuBrew Activation Point')
     .setDescription(
       '**Request a Denuvo game activation** — Pick a game from the dropdown below. A private ticket opens, and an activator will handle your request and send you the authorization code.'
     )

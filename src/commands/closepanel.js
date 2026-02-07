@@ -11,7 +11,7 @@ import { requireGuild } from '../utils/guild.js';
 function buildClosedEmbed({ reopenAt, closedBy } = {}) {
   const embed = new EmbedBuilder()
     .setColor(0xf0b232)
-    .setTitle('🛠️ Game Activation Center — Maintenance')
+    .setTitle('🛠️ DenuBrew Activation Point — Maintenance')
     .setDescription(
       'The activation panel is **temporarily closed** for maintenance. New requests cannot be opened right now.'
     );
