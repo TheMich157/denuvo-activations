@@ -1,6 +1,8 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
 import { suggestGame, voteForGame, getTopVotes, hasVoted, closeVote, getVote } from '../services/voting.js';
 import { requireGuild } from '../utils/guild.js';
+import { getUserTierInfo } from '../services/tiers.js';
+import { isWhitelisted } from '../utils/whitelist.js';
 
 export const data = new SlashCommandBuilder()
   .setName('vote')
@@ -37,6 +39,10 @@ export async function execute(interaction) {
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'suggest') {
+    const tierInfo = getUserTierInfo(interaction.user.id);
+    if (tierInfo.tier === 'none') {
+      return interaction.reply({ content: 'Only Ko-fi tier subscribers can suggest games. Subscribe at our Ko-fi page to unlock this!', flags: MessageFlags.Ephemeral });
+    }
     const gameName = interaction.options.getString('game');
     const result = suggestGame(gameName, interaction.user.id);
     if (result.isNew) {
@@ -46,6 +52,10 @@ export async function execute(interaction) {
   }
 
   if (sub === 'up') {
+    const tierInfo = getUserTierInfo(interaction.user.id);
+    if (tierInfo.tier === 'none') {
+      return interaction.reply({ content: 'Only Ko-fi tier subscribers can vote. Subscribe at our Ko-fi page to unlock this!', flags: MessageFlags.Ephemeral });
+    }
     const id = interaction.options.getInteger('id');
     const vote = getVote(id);
     if (!vote) return interaction.reply({ content: `Suggestion #${id} not found.`, flags: MessageFlags.Ephemeral });
@@ -72,6 +82,9 @@ export async function execute(interaction) {
   }
 
   if (sub === 'close') {
+    if (!isWhitelisted(interaction.user.id)) {
+      return interaction.reply({ content: 'Only whitelisted staff can close suggestions.', flags: MessageFlags.Ephemeral });
+    }
     const id = interaction.options.getInteger('id');
     const status = interaction.options.getString('status');
     const vote = getVote(id);

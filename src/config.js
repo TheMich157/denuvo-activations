@@ -20,6 +20,9 @@ export const config = {
   verifyChannelId: process.env.VERIFY_CHANNEL_ID || null,
   unverifiedRoleId: process.env.UNVERIFIED_ROLE_ID || null,
   verifiedRoleId: process.env.VERIFIED_ROLE_ID || null,
+  lowTierRoleId: process.env.LOW_TIER_ROLE_ID || null,
+  midTierRoleId: process.env.MID_TIER_ROLE_ID || null,
+  highTierRoleId: process.env.HIGH_TIER_ROLE_ID || null,
 };
 
 const REQUIRED = ['token', 'clientId', 'activatorRoleId', 'ticketCategoryId'];

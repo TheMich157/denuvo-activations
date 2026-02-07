@@ -2,6 +2,7 @@ import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
 import { getFullWaitlist, removeFromWaitlist, removeUserFromAllWaitlists, getWaitlistCount } from '../services/waitlist.js';
 import { getGameByAppId, getGameDisplayName } from '../utils/games.js';
 import { requireGuild } from '../utils/guild.js';
+import { isWhitelisted } from '../utils/whitelist.js';
 
 export const data = new SlashCommandBuilder()
   .setName('waitlist')
@@ -68,6 +69,9 @@ export async function execute(interaction) {
   }
 
   if (sub === 'remove') {
+    if (!isWhitelisted(interaction.user.id)) {
+      return interaction.reply({ content: 'Only whitelisted staff can remove users from the waitlist.', flags: MessageFlags.Ephemeral });
+    }
     const targetUser = interaction.options.getUser('user');
     const appId = interaction.options.getInteger('appid');
 

@@ -2,12 +2,9 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { isActivator } from './activator.js';
-import { ACTIVATOR_COMMANDS } from '../config/commands.js';
+import { ACTIVATOR_COMMANDS, WHITELISTED_COMMANDS, STAFF_COMMANDS, PUBLIC_COMMANDS } from '../config/commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-/** Commands only activators can use; whitelist users get profile, pricegame, shop, etc. */
-const ACTIVATOR_ONLY_COMMANDS = ACTIVATOR_COMMANDS;
 
 let cachedIds = null;
 
@@ -39,18 +36,36 @@ export function isWhitelisted(userId) {
  * @returns {{ allowed: boolean; reason?: string }}
  */
 export function canUseCommand(userId, commandName, member) {
-  const activator = isActivator(member);
+  // Public commands — anyone can use
+  if (PUBLIC_COMMANDS.includes(commandName)) {
+    return { allowed: true };
+  }
 
-  if (ACTIVATOR_ONLY_COMMANDS.includes(commandName)) {
-    return activator
+  // Activator-only commands — requires Activator role
+  if (ACTIVATOR_COMMANDS.includes(commandName)) {
+    return isActivator(member)
       ? { allowed: true }
       : { allowed: false, reason: 'Only activators can use this command.' };
   }
 
-  if (!isWhitelisted(userId)) {
-    return { allowed: false, reason: 'You are not whitelisted to use commands.' };
+  // Whitelisted-only commands — requires whitelist.json
+  if (WHITELISTED_COMMANDS.includes(commandName)) {
+    return isWhitelisted(userId)
+      ? { allowed: true }
+      : { allowed: false, reason: 'Only whitelisted staff can use this command.' };
   }
-  return { allowed: true };
+
+  // Staff commands — activator OR whitelisted
+  if (STAFF_COMMANDS.includes(commandName)) {
+    return (isActivator(member) || isWhitelisted(userId))
+      ? { allowed: true }
+      : { allowed: false, reason: 'Only staff can use this command.' };
+  }
+
+  // Fallback: require whitelisted
+  return isWhitelisted(userId)
+    ? { allowed: true }
+    : { allowed: false, reason: 'You are not authorized to use this command.' };
 }
 
 export function invalidateWhitelistCache() {

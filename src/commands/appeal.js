@@ -2,7 +2,7 @@ import { SlashCommandBuilder, EmbedBuilder, MessageFlags, ModalBuilder, TextInpu
 import { submitAppeal, getPendingAppeals, getAppeal, approveAppeal, denyAppeal } from '../services/appeals.js';
 import { isBlacklisted, removeFromBlacklist } from '../services/blacklist.js';
 import { clearWarnings } from '../services/warnings.js';
-import { isActivator } from '../utils/activator.js';
+import { isWhitelisted } from '../utils/whitelist.js';
 import { requireGuild } from '../utils/guild.js';
 
 export const data = new SlashCommandBuilder()
@@ -62,8 +62,8 @@ export async function execute(interaction) {
   }
 
   if (sub === 'list') {
-    if (!isActivator(interaction.member)) {
-      return interaction.reply({ content: 'Staff only.', flags: MessageFlags.Ephemeral });
+    if (!isWhitelisted(interaction.user.id)) {
+      return interaction.reply({ content: 'Only whitelisted staff can view appeals.', flags: MessageFlags.Ephemeral });
     }
     const pending = getPendingAppeals();
     if (pending.length === 0) return interaction.reply({ content: 'No pending appeals.', flags: MessageFlags.Ephemeral });
@@ -82,8 +82,8 @@ export async function execute(interaction) {
   }
 
   if (sub === 'approve') {
-    if (!isActivator(interaction.member)) {
-      return interaction.reply({ content: 'Staff only.', flags: MessageFlags.Ephemeral });
+    if (!isWhitelisted(interaction.user.id)) {
+      return interaction.reply({ content: 'Only whitelisted staff can approve appeals.', flags: MessageFlags.Ephemeral });
     }
     const id = interaction.options.getInteger('id');
     const note = interaction.options.getString('note');
@@ -133,8 +133,8 @@ export async function execute(interaction) {
   }
 
   if (sub === 'deny') {
-    if (!isActivator(interaction.member)) {
-      return interaction.reply({ content: 'Staff only.', flags: MessageFlags.Ephemeral });
+    if (!isWhitelisted(interaction.user.id)) {
+      return interaction.reply({ content: 'Only whitelisted staff can deny appeals.', flags: MessageFlags.Ephemeral });
     }
     const id = interaction.options.getInteger('id');
     const note = interaction.options.getString('note');

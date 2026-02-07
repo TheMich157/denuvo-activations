@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
-import { setUserTier, getUserTierInfo, removeUserTier, getAllTieredUsers, TIERS } from '../services/tiers.js';
+import { setUserTier, getUserTierInfo, removeUserTier, getAllTieredUsers, TIERS, syncTierRole } from '../services/tiers.js';
 import { requireGuild } from '../utils/guild.js';
 
 export const data = new SlashCommandBuilder()
@@ -45,13 +45,23 @@ export async function execute(interaction) {
     const tier = interaction.options.getString('tier');
     setUserTier(user.id, tier);
     const info = TIERS[tier];
-    return interaction.reply({ content: `✅ Set <@${user.id}> to **${info.emoji} ${info.label}**.`, flags: MessageFlags.Ephemeral });
+
+    // Auto-assign Discord role
+    const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+    if (member) await syncTierRole(member, tier);
+
+    return interaction.reply({ content: `✅ Set <@${user.id}> to **${info.emoji} ${info.label}** (role synced).`, flags: MessageFlags.Ephemeral });
   }
 
   if (sub === 'remove') {
     const user = interaction.options.getUser('user');
     removeUserTier(user.id);
-    return interaction.reply({ content: `✅ Removed tier from <@${user.id}>.`, flags: MessageFlags.Ephemeral });
+
+    // Remove all tier Discord roles
+    const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+    if (member) await syncTierRole(member, 'none');
+
+    return interaction.reply({ content: `✅ Removed tier and role from <@${user.id}>.`, flags: MessageFlags.Ephemeral });
   }
 
   if (sub === 'view') {

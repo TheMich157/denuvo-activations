@@ -1,4 +1,5 @@
 import { db, scheduleSave } from '../db/index.js';
+import { config } from '../config.js';
 
 /**
  * Tier definitions — Low, Mid, High.
@@ -10,6 +11,49 @@ export const TIERS = {
   mid:   { level: 2, label: 'Mid Tier',   emoji: '🥈', color: 0xc0c0c0, cooldownReduction: 0.50, priorityBonus: 10, preorderDiscount: 0.10, waitlistPriority: true  },
   high:  { level: 3, label: 'High Tier',  emoji: '🥇', color: 0xffd700, cooldownReduction: 0.75, priorityBonus: 20, preorderDiscount: 0.20, waitlistPriority: true  },
 };
+
+/** Map tier names to their Discord role IDs. */
+export function getTierRoleId(tier) {
+  if (tier === 'low') return config.lowTierRoleId;
+  if (tier === 'mid') return config.midTierRoleId;
+  if (tier === 'high') return config.highTierRoleId;
+  return null;
+}
+
+/** Get all tier role IDs. */
+export function getAllTierRoleIds() {
+  return [config.lowTierRoleId, config.midTierRoleId, config.highTierRoleId].filter(Boolean);
+}
+
+/** Detect tier from a member's Discord roles. */
+export function getTierFromRoles(member) {
+  if (!member?.roles?.cache) return 'none';
+  if (config.highTierRoleId && member.roles.cache.has(config.highTierRoleId)) return 'high';
+  if (config.midTierRoleId && member.roles.cache.has(config.midTierRoleId)) return 'mid';
+  if (config.lowTierRoleId && member.roles.cache.has(config.lowTierRoleId)) return 'low';
+  return 'none';
+}
+
+/**
+ * Assign the correct tier Discord role to a member (remove others).
+ */
+export async function syncTierRole(member, tier) {
+  if (!member?.roles) return;
+  const allRoleIds = getAllTierRoleIds();
+  const targetRoleId = getTierRoleId(tier);
+
+  // Remove all other tier roles
+  for (const roleId of allRoleIds) {
+    if (roleId && roleId !== targetRoleId && member.roles.cache.has(roleId)) {
+      await member.roles.remove(roleId).catch(() => {});
+    }
+  }
+
+  // Add the target tier role
+  if (targetRoleId && !member.roles.cache.has(targetRoleId)) {
+    await member.roles.add(targetRoleId).catch(() => {});
+  }
+}
 
 /**
  * Set a user's tier.
