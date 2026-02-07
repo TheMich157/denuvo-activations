@@ -94,7 +94,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!allowed) {
       return interaction.reply({ content: reason || 'Command not allowed.', flags: MessageFlags.Ephemeral });
     }
-    return cmd.execute(interaction);
+    try {
+      return await cmd.execute(interaction);
+    } catch (err) {
+      console.error(`[Command] /${interaction.commandName} error:`, err);
+      const content = 'Something went wrong running this command. Please try again.';
+      if (interaction.deferred || interaction.replied) {
+        return interaction.editReply({ content }).catch(() => {});
+      }
+      return interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
   }
   return handle(interaction);
 });

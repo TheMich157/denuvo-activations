@@ -66,7 +66,8 @@ export const data = new SlashCommandBuilder()
   );
 
 export async function execute(interaction) {
-  if (!requireGuild(interaction)) return;
+  const guildErr = requireGuild(interaction);
+  if (guildErr) return interaction.reply({ content: guildErr, flags: MessageFlags.Ephemeral });
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'check') return handleCheck(interaction);

@@ -458,8 +458,10 @@ export async function initDb() {
         PRIMARY KEY(user_id)
       )
     `);
-
-    db.prepare(`
+  } catch {}
+  // User leveling / XP system
+  try {
+    sqlDb.exec(`
       CREATE TABLE IF NOT EXISTS user_levels (
         user_id TEXT PRIMARY KEY,
         xp INTEGER DEFAULT 0,
@@ -467,8 +469,10 @@ export async function initDb() {
         total_messages INTEGER DEFAULT 0,
         last_xp_at TEXT
       )
-    `).run();
-  } catch {}
+    `);
+  } catch (e) {
+    console.error('[DB] Failed to create user_levels table:', e?.message);
+  }
   return db;
 }
 
