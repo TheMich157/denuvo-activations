@@ -2,7 +2,7 @@ import { readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { REST, Routes } from 'discord.js';
-import { Client, Events, GatewayIntentBits } from 'discord.js';
+import { Client, Events, GatewayIntentBits, ActivityType, PresenceUpdateStatus } from 'discord.js';
 import { config, validateConfig } from './src/config.js';
 import { initDb } from './src/db/index.js';
 import { handleMessage } from './src/handlers/messages.js';
@@ -38,6 +38,13 @@ const client = new Client({
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent,
   ],
+  presence: {
+    status: PresenceUpdateStatus.Idle,
+    activities: [{
+      name: 'Getting you your denuvo tokens',
+      type: ActivityType.Listening,
+    }],
+  },
 });
 
 client.once(Events.ClientReady, async (c) => {

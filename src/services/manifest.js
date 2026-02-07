@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 
 const BASE_URL = 'https://generator.ryuu.lol/secure_download';
+const LUA_BASE_URL = 'https://generator.ryuu.lol/resellerlua';
 const FETCH_TIMEOUT_MS = 30_000;
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB Discord file limit
 
@@ -73,4 +74,56 @@ export async function fetchManifest(appId) {
   if (match) filename = match[1].trim();
 
   return { type: 'file', buffer, filename };
+}
+
+/**
+ * Fetch a Lua manifest script from the Ryuu API.
+ * @param {string|number} appId - Steam app ID
+ * @returns {Promise<{ script: string }>}
+ */
+export async function fetchLuaManifest(appId) {
+  if (!config.ryuuApiKey) {
+    throw new Error('RYUU_API_KEY is not configured.');
+  }
+
+  const id = parseInt(appId, 10);
+  if (!Number.isInteger(id) || id < 1) {
+    throw new Error('Invalid App ID — must be a positive integer.');
+  }
+
+  const url = `${LUA_BASE_URL}/${id}?auth_code=${encodeURIComponent(config.ryuuApiKey)}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'DenuvoActivationsBot/1.0' },
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Request timed out after ${FETCH_TIMEOUT_MS / 1000}s. The API may be slow or unreachable.`);
+    }
+    throw new Error(`Network error: ${err.message}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    if (response.status === 404) throw new Error(`No Lua manifest found for App ID **${id}**.`);
+    if (response.status === 401 || response.status === 403) throw new Error('Authentication failed — check RYUU_API_KEY.');
+    if (response.status === 429) throw new Error('Rate limited by the API. Please try again later.');
+    throw new Error(`API error ${response.status}: ${text || response.statusText}`);
+  }
+
+  const script = await response.text();
+
+  if (!script || !script.trim()) {
+    throw new Error('API returned an empty response. No Lua manifest available for this game.');
+  }
+
+  return { script: script.trim() };
 }
