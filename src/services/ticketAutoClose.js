@@ -7,6 +7,7 @@ import { debug } from '../utils/debug.js';
 import { getCooldownHours } from '../utils/games.js';
 import { db } from '../db/index.js';
 import { saveTranscript } from './transcript.js';
+import { addWarning } from './warnings.js';
 
 const log = debug('ticketAutoClose');
 
@@ -80,6 +81,25 @@ async function runCheck(deadlineMinutes = ticketConfig.verifyDeadlineMinutes) {
       gameName: req.game_name,
       gameAppId: req.game_app_id,
     });
+
+    // Auto-warn the requester for inactivity
+    try {
+      const result = addWarning(
+        req.buyer_id,
+        `Ticket auto-closed: screenshot not verified within ${deadlineMinutes} minutes (${req.game_name})`,
+        clientRef.user.id
+      );
+      log(`Warning issued to ${req.buyer_id} (${result.totalWarnings}/3)${result.autoBlacklisted ? ' — AUTO-BLACKLISTED' : ''}`);
+      const user = await clientRef.users.fetch(req.buyer_id).catch(() => null);
+      if (user) {
+        const warnMsg = result.autoBlacklisted
+          ? `⛔ You have been **auto-blacklisted** (${result.totalWarnings}/3 warnings). Your ticket for **${req.game_name}** was closed due to inactivity.`
+          : `⚠️ You received a **warning** (${result.totalWarnings}/3) because your ticket for **${req.game_name}** was auto-closed due to inactivity. At 3 warnings you will be blacklisted.`;
+        await user.send(warnMsg).catch(() => {});
+      }
+    } catch (e) {
+      log('Auto-warn failed:', e?.message);
+    }
   }
 }
 
@@ -148,5 +168,24 @@ async function runStaleCheck() {
       gameAppId: req.game_app_id,
       idleMinutes: STALE_TICKET_MINUTES,
     });
+
+    // Auto-warn the requester for inactivity
+    try {
+      const result = addWarning(
+        req.buyer_id,
+        `Ticket auto-closed: ${STALE_TICKET_MINUTES} minutes of inactivity (${req.game_name})`,
+        clientRef.user.id
+      );
+      log(`Warning issued to ${req.buyer_id} (${result.totalWarnings}/3)${result.autoBlacklisted ? ' — AUTO-BLACKLISTED' : ''}`);
+      const user = await clientRef.users.fetch(req.buyer_id).catch(() => null);
+      if (user) {
+        const warnMsg = result.autoBlacklisted
+          ? `⛔ You have been **auto-blacklisted** (${result.totalWarnings}/3 warnings). Your ticket for **${req.game_name}** was closed due to inactivity.`
+          : `⚠️ You received a **warning** (${result.totalWarnings}/3) because your ticket for **${req.game_name}** was auto-closed after ${STALE_TICKET_MINUTES} minutes of inactivity. At 3 warnings you will be blacklisted.`;
+        await user.send(warnMsg).catch(() => {});
+      }
+    } catch (e) {
+      log('Auto-warn failed:', e?.message);
+    }
   }
 }

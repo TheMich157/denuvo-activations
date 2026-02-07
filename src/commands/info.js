@@ -325,10 +325,9 @@ export async function execute(interaction) {
       .setURL('https://www.sordum.org/9470/'),
   );
 
-  // Send all embeds publicly
-  await interaction.reply({
-    content: '_ _',
-    embeds: [welcomeEmbed, guideEmbed, toolsEmbed, tierEmbed, preorderEmbed, cmdEmbed, rulesEmbed, faqEmbed],
-    components: [row1],
-  });
+  // Split into multiple messages to stay under Discord's 6000-char embed limit
+  await interaction.reply({ embeds: [welcomeEmbed, guideEmbed] });
+  await interaction.channel.send({ embeds: [toolsEmbed, tierEmbed] });
+  await interaction.channel.send({ embeds: [preorderEmbed, cmdEmbed] });
+  await interaction.channel.send({ embeds: [rulesEmbed, faqEmbed], components: [row1] });
 }
