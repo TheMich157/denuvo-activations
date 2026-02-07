@@ -6,15 +6,18 @@ import {
     PermissionFlagsBits,
     EmbedBuilder,
   } from 'discord.js';
-  import { createRequest, setTicketChannel, checkCooldown } from './requests.js';
-  import { getActivatorsForGame } from './activators.js';
+  import { createRequest, setTicketChannel, checkCooldown, assignIssuer } from './requests.js';
+  import { getActivatorsForGame, getBestActivator, getCredentials } from './activators.js';
+  import { getBalance } from './points.js';
   import { getGameByAppId, getCooldownHours, getGameDisplayName } from '../utils/games.js';
   import { config } from '../config.js';
   import { isValidAppId } from '../utils/validate.js';
   import { isActivator } from '../utils/activator.js';
   import { isBlacklisted } from './blacklist.js';
   import { joinWaitlist, isOnWaitlist } from './waitlist.js';
+  import { isWhitelisted } from '../utils/whitelist.js';
   import { isAway } from './activatorStatus.js';
+  import { notifyActivators } from './statusNotify.js';
   
   export async function createTicketForGame(interaction, appId, options = {}) {
     const { requireTicketCategory = false } = options;
@@ -54,6 +57,10 @@ import {
       };
     }
   
+    // Queue priority: VIP users (whitelisted + high points) get a priority tag
+    const buyerPoints = getBalance(interaction.user.id);
+    const isVip = isWhitelisted(interaction.user.id) && buyerPoints >= 100;
+
     const requestId = createRequest(interaction.user.id, game.appId, game.name);
   
     const overwrites = [
@@ -94,50 +101,99 @@ import {
     .map((a) => `<@${a.activator_id}>`).join(' ');
   const ticketRef = `#${requestId.slice(0, 8).toUpperCase()}`;
 
-  const mainEmbed = new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle(`🎮 Activation Request: ${getGameDisplayName(game)}`)
-    .setDescription(
-      [
-        `**Requester:** <@${interaction.user.id}>`,
-        '',
-        `${activatorMentions}`,
-        'First activator to press the button claims this request. Staff earn points per completion.',
-      ].join('\n')
-    )
-    .addFields(
-      {
-        name: '📋 Status',
-        value: 'Waiting for screenshot',
-        inline: true,
-      },
-      {
-        name: '📸 Required — post a screenshot showing both (within 5 minutes):',
+  // Try auto-assign best activator
+  const best = getBestActivator(game.appId);
+  let autoAssigned = false;
+  if (best) {
+    const result = assignIssuer(requestId, best.activator_id);
+    if (result.ok) autoAssigned = true;
+  }
+
+  let mainEmbed;
+  let components;
+
+  if (autoAssigned) {
+    const hasAutomated = !!getCredentials(best.activator_id, game.appId);
+    mainEmbed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle(`🎮 Activation Request: ${getGameDisplayName(game)}`)
+      .setDescription(
+        [
+          `**Requester:** <@${interaction.user.id}>`,
+          `**Auto-assigned to:** <@${best.activator_id}>`,
+          '',
+          hasAutomated
+            ? '**Automatic:** Use **Get code automatically** (enter 2FA when asked). **Manual:** Use **Done** to paste the code. Press **Help** if needed.'
+            : 'Use **Done** to enter the auth code from drm.steam.run. Press **Help** if needed.',
+        ].join('\n')
+      )
+      .addFields(
+        { name: '📋 Status', value: 'Auto-assigned — awaiting screenshot', inline: true },
+        {
+          name: '📸 Required — post a screenshot showing both (within 5 minutes):',
           value: `Upload your screenshot in this channel. The bot will verify automatically. **Ticket closes if not verified in 5 minutes** (${getCooldownHours(game.appId)}h cooldown applies).`,
           inline: false,
         },
+        { name: '1. Game folder Properties', value: 'Right‑click the game folder → **Properties** (dialog visible in screenshot)', inline: false },
+        { name: '2. WUB (Windows Update Blocker)', value: 'Updates disabled/paused **and the red shield with X icon**', inline: false }
+      )
+      .setFooter({ text: `Ticket ${ticketRef} • Post your screenshot, then activator can proceed` })
+      .setTimestamp();
+
+    const actionComponents = [
+      new ButtonBuilder().setCustomId('done_request').setLabel('Done – enter auth code').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('call_activator').setLabel('Help').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('close_ticket').setLabel('Close ticket').setStyle(ButtonStyle.Secondary),
+    ];
+    if (hasAutomated) {
+      actionComponents.unshift(
+        new ButtonBuilder().setCustomId(`auto_code:${requestId}`).setLabel('Get code automatically').setStyle(ButtonStyle.Primary).setEmoji('⚡')
+      );
+    }
+    components = [new ActionRowBuilder().addComponents(actionComponents)];
+  } else {
+    const vipTag = isVip ? ' ⭐ **VIP**' : '';
+    mainEmbed = new EmbedBuilder()
+      .setColor(isVip ? 0xf1c40f : 0x5865f2)
+      .setTitle(`🎮 Activation Request: ${getGameDisplayName(game)}`)
+      .setDescription(
+        [
+          `**Requester:** <@${interaction.user.id}>${vipTag}`,
+          '',
+          `${activatorMentions}`,
+          'First activator to press the button claims this request. Staff earn points per completion.',
+        ].join('\n')
+      )
+      .addFields(
+        { name: '📋 Status', value: 'Waiting for screenshot', inline: true },
         {
-          name: '1. Game folder Properties',
-          value: 'Right‑click the game folder → **Properties** (dialog visible in screenshot)',
+          name: '📸 Required — post a screenshot showing both (within 5 minutes):',
+          value: `Upload your screenshot in this channel. The bot will verify automatically. **Ticket closes if not verified in 5 minutes** (${getCooldownHours(game.appId)}h cooldown applies).`,
           inline: false,
         },
-        {
-          name: '2. WUB (Windows Update Blocker)',
-          value: 'Updates disabled/paused **and the red shield with X icon**',
-          inline: false,
-      }
-    )
-    .setFooter({ text: `Ticket ${ticketRef} • Post your screenshot, then an activator can claim` })
+        { name: '1. Game folder Properties', value: 'Right‑click the game folder → **Properties** (dialog visible in screenshot)', inline: false },
+        { name: '2. WUB (Windows Update Blocker)', value: 'Updates disabled/paused **and the red shield with X icon**', inline: false }
+      )
+      .setFooter({ text: `Ticket ${ticketRef} • Post your screenshot, then an activator can claim` })
       .setTimestamp();
-  
+    components = [claimRow];
+  }
+
     const msg = {
       content: null,
       embeds: [mainEmbed],
-      components: [claimRow],
+      components,
     };
   
     if (ticketChannel) {
       await ticketChannel.send(msg);
+      // DM activators who have this game (not away)
+      notifyActivators(interaction.client, {
+        gameName: getGameDisplayName(game),
+        gameAppId: game.appId,
+        buyerId: interaction.user.id,
+        ticketChannelId: ticketChannel.id,
+      }, availableActivators).catch(() => {});
       return { ok: true, channel: ticketChannel };
     }
     return { ok: true, message: msg };

@@ -16,6 +16,8 @@ import { recordStreakActivity, getStreakInfo, getStreakBonus } from '../services
 import { addPoints } from '../services/points.js';
 import { config } from '../config.js';
 import { isActivator } from '../utils/activator.js';
+import { triggerPanelSync } from '../services/panel.js';
+import { sendStatusDM } from '../services/statusNotify.js';
 
 const VALIDITY_MINUTES = 30;
 
@@ -50,6 +52,10 @@ export async function completeAndNotifyTicket(req, authCode, client) {
       addPoints(req.issuer_id, bonus, 'streak_bonus', req.id);
     }
   }
+
+  // Sync panel to reflect stock change + DM buyer
+  triggerPanelSync().catch(() => {});
+  sendStatusDM(client, req.buyer_id, 'completed', { gameName, issuerName: req.issuer_id }).catch(() => {});
 
   const ticketChannel = req.ticket_channel_id
     ? await client.channels.fetch(req.ticket_channel_id).catch(() => null)

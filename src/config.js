@@ -13,6 +13,10 @@ export const config = {
   reviewChannelId: process.env.REVIEW_CHANNEL_ID || null,
   manifestChannelId: process.env.MANIFEST_CHANNEL_ID || null,
   ryuuApiKey: process.env.RYUU_API_KEY || null,
+  preorderChannelId: process.env.PREORDER_CHANNEL_ID || null,
+  tipVerifyChannelId: process.env.TIP_VERIFY_CHANNEL_ID || null,
+  kofiUrl: process.env.KOFI_URL || 'https://ko-fi.com/denubrew',
+  minDonation: parseInt(process.env.MIN_DONATION ?? '5', 10),
 };
 
 const REQUIRED = ['token', 'clientId', 'activatorRoleId', 'ticketCategoryId'];

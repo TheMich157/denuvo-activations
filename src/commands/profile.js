@@ -113,6 +113,19 @@ export async function execute(interaction) {
     }
   }
 
+  // —— Avg response time (activators only) ——
+  if (activator) {
+    const avgRow = db.prepare(`
+      SELECT AVG((julianday(completed_at) - julianday(created_at)) * 24 * 60) AS avg_mins
+      FROM requests WHERE issuer_id = ? AND status = 'completed' AND completed_at IS NOT NULL
+    `).get(userId);
+    const avgMins = avgRow?.avg_mins != null ? Math.round(avgRow.avg_mins) : null;
+    if (avgMins != null) {
+      const avgText = avgMins < 60 ? `**${avgMins}** min` : `**${Math.floor(avgMins / 60)}h ${avgMins % 60}m**`;
+      embed.addFields({ name: '⚡ Avg Response', value: avgText, inline: true });
+    }
+  }
+
   // —— Streak (activators only) ——
   if (activator) {
     const streak = getStreakInfo(userId);

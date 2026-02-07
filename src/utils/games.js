@@ -63,8 +63,8 @@ export function isHighDemandGame(appId) {
   return game?.highDemand === true;
 }
 
-/** Display name with 🔥 for high-demand games. */
+/** Display name for games. */
 export function getGameDisplayName(game) {
   if (!game) return '';
-  return game.highDemand ? `${game.name} 🔥` : game.name;
+  return game.name;
 }

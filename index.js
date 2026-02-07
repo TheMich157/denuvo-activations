@@ -11,8 +11,10 @@ import { startTicketAutoClose } from './src/services/ticketAutoClose.js';
 import { setClient as setActivationLogClient } from './src/services/activationLog.js';
 import { startStockRestock } from './src/services/stockRestock.js';
 import { startDailyDigest } from './src/services/dailyDigest.js';
-import { syncPanelMessage } from './src/services/panel.js';
+import { syncPanelMessage, setPanelClient } from './src/services/panel.js';
 import { buildPanelMessagePayload } from './src/commands/ticketpanel.js';
+import { startBackupService } from './src/services/backup.js';
+import { startLeaderboardScheduler } from './src/services/leaderboardScheduler.js';
 import { MessageFlags } from 'discord.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -65,6 +67,9 @@ client.once(Events.ClientReady, async (c) => {
   setActivationLogClient(client);
   startStockRestock(client);
   startDailyDigest(client);
+  startBackupService();
+  startLeaderboardScheduler(client);
+  setPanelClient(client, buildPanelMessagePayload);
   syncPanelMessage(client, buildPanelMessagePayload()).catch((err) =>
     console.error('[Panel] Startup sync failed:', err?.message)
   );

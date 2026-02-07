@@ -25,6 +25,9 @@ import { handleButton as doneHandleButton, handleModal as doneHandleModal, handl
 import { handleButton as invalidHandleButton } from '../commands/invalid.js';
 import { handleButton as callModHandleButton } from '../commands/call_mod.js';
 import { handleButton as transferHandleButton } from '../commands/transfer.js';
+import { sendStatusDM } from '../services/statusNotify.js';
+import { getPreorder, submitClaim, getClaim, verifyClaim } from '../services/preorder.js';
+import { config } from '../config.js';
 
 function buildIssuerActionRow(requestId, hasAutomated = false) {
   const components = [
@@ -94,6 +97,8 @@ async function handleClaimRequest(interaction) {
     embeds: [claimedEmbed],
     components: [buildIssuerActionRow(requestId, hasAutomated)],
   });
+  // DM buyer that request was claimed
+  sendStatusDM(interaction.client, req.buyer_id, 'claimed', { gameName: req.game_name }).catch(() => {});
   return true;
 }
 
@@ -222,6 +227,10 @@ async function handleCloseTicket(interaction) {
   await saveTranscript(interaction.client, interaction.channelId, req.id).catch(() => {});
   cancelRequest(req.id);
   clearState(interaction.channelId);
+  // DM buyer about cancellation
+  if (interaction.user.id !== req.buyer_id) {
+    sendStatusDM(interaction.client, req.buyer_id, 'cancelled', { gameName: req.game_name }).catch(() => {});
+  }
   const channel = interaction.channel;
   if (channel?.deletable) {
     await interaction.reply({ content: 'Closing ticket...', flags: MessageFlags.Ephemeral });
@@ -229,6 +238,143 @@ async function handleCloseTicket(interaction) {
   } else {
     await interaction.reply({ content: 'Ticket cancelled. I cannot delete this channel.', flags: MessageFlags.Ephemeral });
   }
+  return true;
+}
+
+async function handleTipVerifyButton(interaction) {
+  if (!interaction.isButton()) return false;
+  const isVerify = interaction.customId.startsWith('verify_tip:');
+  const isReject = interaction.customId.startsWith('reject_tip:');
+  if (!isVerify && !isReject) return false;
+
+  // Only activators can verify/reject tips
+  if (!isActivator(interaction.member)) {
+    await interaction.reply({ content: 'Only activators can verify or reject tips.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  const parts = interaction.customId.split(':');
+  const preorderId = parseInt(parts[1], 10);
+  const userId = parts[2];
+
+  const preorder = getPreorder(preorderId);
+  if (!preorder) {
+    await interaction.reply({ content: `Preorder #${preorderId} not found.`, flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  if (isVerify) {
+    verifyClaim(preorderId, userId);
+    const embed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle('✅ Tip Verified')
+      .setDescription(`<@${userId}>'s tip for preorder **#${preorderId}** (${preorder.game_name}) has been manually verified by <@${interaction.user.id}>.`)
+      .setTimestamp();
+    await interaction.update({ embeds: [embed], components: [] });
+
+    // DM the user
+    try {
+      const user = await interaction.client.users.fetch(userId).catch(() => null);
+      if (user) {
+        await user.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x57f287)
+              .setTitle('✅ Your Tip Was Verified!')
+              .setDescription(`Your tip for preorder **#${preorderId}** (${preorder.game_name}) has been verified. You'll be notified when the preorder is fulfilled!`)
+              .setTimestamp(),
+          ],
+        }).catch(() => {});
+      }
+    } catch {}
+
+    // Notify thread
+    if (preorder.thread_id) {
+      try {
+        const thread = await interaction.client.channels.fetch(preorder.thread_id).catch(() => null);
+        if (thread) {
+          await thread.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(0x57f287)
+                .setDescription(`✅ <@${userId}>'s tip has been manually verified by <@${interaction.user.id}>.`)
+                .setTimestamp(),
+            ],
+          });
+        }
+      } catch {}
+    }
+  } else {
+    // Reject
+    const embed = new EmbedBuilder()
+      .setColor(0xed4245)
+      .setTitle('❌ Tip Rejected')
+      .setDescription(`<@${userId}>'s tip proof for preorder **#${preorderId}** was rejected by <@${interaction.user.id}>.\n\nPlease re-submit a valid Ko-fi receipt screenshot.`)
+      .setTimestamp();
+    await interaction.update({ embeds: [embed], components: [] });
+
+    // DM the user
+    try {
+      const user = await interaction.client.users.fetch(userId).catch(() => null);
+      if (user) {
+        await user.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xed4245)
+              .setTitle('❌ Tip Proof Rejected')
+              .setDescription(
+                `Your tip proof for preorder **#${preorderId}** (${preorder.game_name}) was rejected.\n\n` +
+                `Please submit a clearer screenshot of your Ko-fi donation receipt (minimum $${preorder.price.toFixed(2)}).`
+              )
+              .setTimestamp(),
+          ],
+        }).catch(() => {});
+      }
+    } catch {}
+  }
+
+  return true;
+}
+
+async function handlePreorderClaim(interaction) {
+  if (!interaction.isButton() || !interaction.customId.startsWith('preorder_claim:')) return false;
+  const preorderId = parseInt(interaction.customId.split(':')[1], 10);
+  const preorder = getPreorder(preorderId);
+  if (!preorder || preorder.status !== 'open') {
+    await interaction.reply({ content: 'This preorder is no longer open.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  const existing = getClaim(preorderId, interaction.user.id);
+  if (existing) {
+    const status = existing.verified ? '✅ **Verified**' : '⏳ **Pending verification**';
+    await interaction.reply({
+      content: `You've already claimed a spot on this preorder. Status: ${status}\n\nIf you haven't already, post your tip proof in <#${config.tipVerifyChannelId || 'tip-verify'}> and mention **preorder #${preorderId}**.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+
+  submitClaim(preorderId, interaction.user.id);
+
+  const embed = new EmbedBuilder()
+    .setColor(0xe91e63)
+    .setTitle('🎟️ Preorder Spot Claimed!')
+    .setDescription(
+      [
+        `You've claimed a spot for **${preorder.game_name}** (Preorder #${preorderId}).`,
+        '',
+        '**Next steps:**',
+        `1. Donate at least **$${preorder.price.toFixed(2)}** on [Ko-fi](${config.kofiUrl})`,
+        `2. Post your tip proof screenshot in <#${config.tipVerifyChannelId || 'tip-verify'}>`,
+        `3. Include **"preorder ${preorderId}"** or **"#${preorderId}"** in your message`,
+        '4. The bot will auto-verify your payment!',
+      ].join('\n')
+    )
+    .setFooter({ text: 'Your spot is reserved — please verify within 48 hours' })
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   return true;
 }
 
@@ -240,6 +386,8 @@ export async function handle(interaction) {
     handleClaimRequest,
     handleAutoCodeButton,
     handleAutoCodeModal,
+    handlePreorderClaim,
+    handleTipVerifyButton,
     doneHandleCopyButton,
     handleCodeWorkedButton,
     handleRateButton,

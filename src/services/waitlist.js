@@ -30,6 +30,51 @@ export function getWaitlistForGame(gameAppId) {
 }
 
 /**
+ * Get the full waitlist grouped by game.
+ * @returns {{ game_app_id: number; users: string[] }[]}
+ */
+export function getFullWaitlist() {
+  const rows = db.prepare(
+    'SELECT game_app_id, user_id, created_at FROM game_waitlist ORDER BY game_app_id, created_at ASC'
+  ).all();
+  const grouped = new Map();
+  for (const r of rows) {
+    if (!grouped.has(r.game_app_id)) grouped.set(r.game_app_id, []);
+    grouped.get(r.game_app_id).push(r.user_id);
+  }
+  return [...grouped.entries()].map(([game_app_id, users]) => ({ game_app_id, users }));
+}
+
+/**
+ * Remove a specific user from a specific game waitlist.
+ */
+export function removeFromWaitlist(userId, gameAppId) {
+  const before = db.prepare('SELECT 1 FROM game_waitlist WHERE user_id = ? AND game_app_id = ?').get(String(userId), gameAppId);
+  if (!before) return false;
+  db.prepare('DELETE FROM game_waitlist WHERE user_id = ? AND game_app_id = ?').run(String(userId), gameAppId);
+  scheduleSave();
+  return true;
+}
+
+/**
+ * Remove a user from ALL waitlists.
+ */
+export function removeUserFromAllWaitlists(userId) {
+  const count = db.prepare('SELECT COUNT(*) AS n FROM game_waitlist WHERE user_id = ?').get(String(userId));
+  db.prepare('DELETE FROM game_waitlist WHERE user_id = ?').run(String(userId));
+  scheduleSave();
+  return count?.n ?? 0;
+}
+
+/**
+ * Get total waitlist count.
+ */
+export function getWaitlistCount() {
+  const row = db.prepare('SELECT COUNT(*) AS n FROM game_waitlist').get();
+  return row?.n ?? 0;
+}
+
+/**
  * Notify all users on the waitlist for a game that stock was added, then clear them.
  * @param {import('discord.js').Client} client
  * @param {number} gameAppId

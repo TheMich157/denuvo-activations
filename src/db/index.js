@@ -257,6 +257,51 @@ export async function initDb() {
       )
     `);
   } catch {}
+  // Transcripts
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS transcripts (
+        request_id TEXT PRIMARY KEY,
+        buyer_id TEXT NOT NULL,
+        issuer_id TEXT,
+        game_name TEXT,
+        transcript TEXT NOT NULL,
+        message_count INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
+  // Preorders
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS preorders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_name TEXT NOT NULL,
+        game_app_id INTEGER,
+        description TEXT,
+        price REAL DEFAULT 5.0,
+        created_by TEXT NOT NULL,
+        thread_id TEXT,
+        status TEXT DEFAULT 'open' CHECK(status IN ('open', 'closed', 'fulfilled')),
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
+  // Preorder claims (users who paid/donated)
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS preorder_claims (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        preorder_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        verified INTEGER DEFAULT 0,
+        proof_message_id TEXT,
+        verified_at TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(preorder_id, user_id)
+      )
+    `);
+  } catch {}
   return db;
 }
 

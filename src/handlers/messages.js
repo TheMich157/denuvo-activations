@@ -16,6 +16,14 @@ import { config } from '../config.js';
 import { fetchManifest, fetchLuaManifest } from '../services/manifest.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
 import { getGameByAppId, getGameDisplayName } from '../utils/games.js';
+import {
+  getPreorder,
+  getClaim,
+  submitClaim,
+  verifyClaim,
+  getOpenPreorders,
+} from '../services/preorder.js';
+import { isActivator } from '../utils/activator.js';
 
 const IMAGE_EXT = /\.(png|jpg|jpeg|webp|gif)(\?.*)?$/i;
 const FAIL_THRESHOLD = 5;
@@ -30,6 +38,251 @@ function buildManualVerifyRow(channelId) {
       .setStyle(ButtonStyle.Success)
       .setEmoji('✋')
   );
+}
+
+/* ──────────────── Tip Proof Verification ──────────────── */
+
+/**
+ * Extract text from an image using the available OCR provider.
+ */
+async function extractTextFromImage(url) {
+  // Try Groq first (LLM-based), fall back to tesseract
+  try {
+    const { extractText: groqExtract } = await import('../services/screenshotVerify/providers/groq.js');
+    const result = await groqExtract(url);
+    if (!result.error && result.text) return result.text;
+  } catch {}
+  try {
+    const { extractText: tesseractExtract } = await import('../services/screenshotVerify/providers/tesseract.js');
+    const result = await tesseractExtract(url);
+    if (!result.error && result.text) return result.text;
+  } catch {}
+  return '';
+}
+
+/**
+ * Parse preorder ID from message text.
+ * Supports: "preorder 5", "preorder #5", "#5", "po5", "po #5"
+ */
+function parsePreorderIdFromText(text) {
+  const patterns = [
+    /preorder\s*#?\s*(\d+)/i,
+    /\bpo\s*#?\s*(\d+)/i,
+    /#(\d+)/,
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) return parseInt(m[1], 10);
+  }
+  return null;
+}
+
+/**
+ * Check if OCR text contains Ko-fi payment indicators and amount.
+ * Returns { isKofi: boolean, amount: number | null }
+ */
+function detectKofiPayment(text) {
+  const lower = text.toLowerCase();
+  const isKofi = /ko-?fi/i.test(text)
+    || /coffee/i.test(text)
+    || /supporter/i.test(text)
+    || /tip|donation|bought|received|thank/i.test(text);
+
+  // Try to extract dollar amount
+  let amount = null;
+  const amountMatch = text.match(/\$\s*(\d+(?:\.\d{1,2})?)/);
+  if (amountMatch) amount = parseFloat(amountMatch[1]);
+
+  // Also try matching plain numbers near currency words
+  if (!amount) {
+    const nearCurrency = text.match(/(?:USD|usd|dollars?)\s*(\d+(?:\.\d{1,2})?)/i)
+      || text.match(/(\d+(?:\.\d{1,2})?)\s*(?:USD|usd|dollars?)/i);
+    if (nearCurrency) amount = parseFloat(nearCurrency[1]);
+  }
+
+  return { isKofi, amount };
+}
+
+async function handleTipVerification(message) {
+  if (!config.tipVerifyChannelId || message.channelId !== config.tipVerifyChannelId) return false;
+
+  // Must have an image attachment
+  const attachment = message.attachments.find((a) => IMAGE_EXT.test(a.url));
+  if (!attachment) {
+    // If just text with a preorder mention but no image
+    const preorderId = parsePreorderIdFromText(message.content);
+    if (preorderId) {
+      const embed = new EmbedBuilder()
+        .setColor(0xfee75c)
+        .setTitle('📸 Proof Required')
+        .setDescription(
+          `Please attach a **screenshot** of your Ko-fi tip/donation receipt for preorder **#${preorderId}**.\n\n` +
+          `The screenshot should clearly show the payment amount ($${config.minDonation}+ minimum).`
+        )
+        .setTimestamp();
+      await message.reply({ embeds: [embed] });
+      return true;
+    }
+    return false; // Not relevant
+  }
+
+  // Try to detect which preorder this is for
+  let preorderId = parsePreorderIdFromText(message.content);
+
+  await message.react('🔍').catch(() => {});
+
+  // OCR the image to detect Ko-fi payment info
+  const ocrText = await extractTextFromImage(attachment.url);
+  const { isKofi, amount } = detectKofiPayment(ocrText);
+
+  // If no preorder ID in message, try to find it from OCR text
+  if (!preorderId) {
+    preorderId = parsePreorderIdFromText(ocrText);
+  }
+
+  // If still no preorder ID, check if there's only one open preorder (auto-detect)
+  if (!preorderId) {
+    const open = getOpenPreorders();
+    if (open.length === 1) {
+      preorderId = open[0].id;
+    }
+  }
+
+  // Remove search reaction
+  await message.reactions.cache.get('🔍')?.users?.remove(message.client.user.id).catch(() => {});
+
+  if (!preorderId) {
+    await message.react('❓').catch(() => {});
+    const embed = new EmbedBuilder()
+      .setColor(0xfee75c)
+      .setTitle('❓ Which Preorder?')
+      .setDescription(
+        'Could not determine which preorder this tip is for.\n\n' +
+        'Please include the preorder number in your message, e.g.:\n' +
+        '`preorder #5` or just `#5`'
+      )
+      .setTimestamp();
+    await message.reply({ embeds: [embed] });
+    return true;
+  }
+
+  const preorder = getPreorder(preorderId);
+  if (!preorder) {
+    await message.react('❌').catch(() => {});
+    await message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xed4245)
+          .setDescription(`Preorder **#${preorderId}** was not found.`)
+          .setTimestamp(),
+      ],
+    });
+    return true;
+  }
+
+  if (preorder.status !== 'open') {
+    await message.react('❌').catch(() => {});
+    await message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xed4245)
+          .setDescription(`Preorder **#${preorderId}** (${preorder.game_name}) is **${preorder.status}** — no longer accepting donations.`)
+          .setTimestamp(),
+      ],
+    });
+    return true;
+  }
+
+  // Submit claim if not already claimed
+  const existingClaim = getClaim(preorderId, message.author.id);
+  if (!existingClaim) {
+    submitClaim(preorderId, message.author.id, message.id);
+  }
+
+  // Determine verification
+  const minDonation = preorder.price || config.minDonation;
+  const meetsAmount = amount !== null && amount >= minDonation;
+  const autoVerified = isKofi && meetsAmount;
+
+  if (autoVerified) {
+    // Auto-verify
+    verifyClaim(preorderId, message.author.id);
+    await message.react('✅').catch(() => {});
+
+    const embed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle('✅ Tip Verified!')
+      .setDescription(
+        [
+          `Payment of **$${amount.toFixed(2)}** detected for preorder **#${preorderId}** (${preorder.game_name}).`,
+          '',
+          'Your spot is **confirmed**! You\'ll be notified when the preorder is fulfilled.',
+        ].join('\n')
+      )
+      .setFooter({ text: `Auto-verified • Preorder #${preorderId}` })
+      .setTimestamp();
+    await message.reply({ embeds: [embed] });
+
+    // Notify the preorder thread
+    if (preorder.thread_id) {
+      try {
+        const thread = await message.client.channels.fetch(preorder.thread_id).catch(() => null);
+        if (thread) {
+          await thread.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(0x57f287)
+                .setDescription(`✅ <@${message.author.id}> verified a **$${amount.toFixed(2)}** tip for this preorder.`)
+                .setTimestamp(),
+            ],
+          });
+        }
+      } catch {}
+    }
+  } else {
+    // Needs manual review — detected partial info or failed OCR
+    await message.react('⏳').catch(() => {});
+
+    const issues = [];
+    if (!isKofi) issues.push('• Could not detect Ko-fi payment in the screenshot');
+    if (amount === null) issues.push('• Could not detect the payment amount');
+    else if (amount < minDonation) issues.push(`• Amount detected (**$${amount.toFixed(2)}**) is below the minimum **$${minDonation.toFixed(2)}**`);
+
+    const embed = new EmbedBuilder()
+      .setColor(0xfee75c)
+      .setTitle('⏳ Pending Manual Verification')
+      .setDescription(
+        [
+          `Tip proof submitted for preorder **#${preorderId}** (${preorder.game_name}).`,
+          '',
+          '**Issues detected:**',
+          ...issues,
+          '',
+          'An activator will manually review your proof shortly.',
+          `Minimum donation: **$${minDonation.toFixed(2)}** on [Ko-fi](${config.kofiUrl})`,
+        ].join('\n')
+      )
+      .setFooter({ text: `Preorder #${preorderId} • Pending review` })
+      .setTimestamp();
+
+    // Add manual verify button for activators
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`verify_tip:${preorderId}:${message.author.id}`)
+        .setLabel('Verify tip manually')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji('✅'),
+      new ButtonBuilder()
+        .setCustomId(`reject_tip:${preorderId}:${message.author.id}`)
+        .setLabel('Reject')
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji('❌'),
+    );
+
+    await message.reply({ embeds: [embed], components: [row] });
+  }
+
+  return true;
 }
 
 async function handleManifestRequest(message) {
@@ -192,6 +445,9 @@ async function handleManifestRequest(message) {
 
 export async function handleMessage(message) {
   if (message.author.bot || !message.guild) return;
+
+  // Handle tip proof verification in the designated channel
+  if (await handleTipVerification(message)) return;
 
   // Handle manifest requests in the designated channel
   if (await handleManifestRequest(message)) return;

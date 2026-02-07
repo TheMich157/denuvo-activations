@@ -2,6 +2,7 @@ import { db, scheduleSave } from '../db/index.js';
 import { encrypt, decrypt } from '../utils/crypto.js';
 import { config } from '../config.js';
 import { isValidDiscordId, isValidAppId } from '../utils/validate.js';
+import { isAway } from './activatorStatus.js';
 
 export function addActivatorGame(activatorId, gameAppId, gameName, method, credentials = null, stockQuantity = 5) {
   if (!isValidDiscordId(activatorId) || !isValidAppId(gameAppId)) throw new Error('Invalid activator or game ID');
@@ -95,6 +96,44 @@ export function getActivatorsForGame(gameAppId, excludeOverLimit = true) {
     const count = countRow?.count ?? 0;
     return count < limit;
   });
+}
+
+/**
+ * Pick the best available activator for a game.
+ * Scoring: not away (+10), higher rating (+avg), more stock (+1 per 5 stock), automated method (+2).
+ * @param {number} gameAppId
+ * @returns {{ activator_id: string; score: number } | null}
+ */
+export function getBestActivator(gameAppId) {
+  const activators = getActivatorsForGame(gameAppId, true);
+  if (activators.length === 0) return null;
+
+  const scored = activators.map((a) => {
+    let score = 0;
+    // Prefer not-away
+    if (!isAway(a.activator_id)) score += 10;
+    // Rating bonus
+    const ratingRow = db.prepare(
+      'SELECT AVG(rating) AS avg FROM activator_ratings WHERE activator_id = ?'
+    ).get(a.activator_id);
+    if (ratingRow?.avg) score += ratingRow.avg;
+    // Stock bonus
+    score += Math.min(5, (a.stock_quantity ?? 0) / 5);
+    // Automated method bonus
+    if (a.method === 'automated') score += 2;
+    // Fewer daily activations = more available
+    const steamId = a.steam_username || `manual_${a.activator_id}_${a.game_app_id}`;
+    const today = new Date().toISOString().slice(0, 10);
+    const countRow = db.prepare(
+      'SELECT count FROM daily_activations WHERE steam_account_id = ? AND date = ?'
+    ).get(steamId, today);
+    const used = countRow?.count ?? 0;
+    score += Math.max(0, config.dailyActivationLimit - used);
+    return { ...a, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0] || null;
 }
 
 export function getActivatorGames(activatorId) {

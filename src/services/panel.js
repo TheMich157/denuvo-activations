@@ -18,7 +18,24 @@ export function clearPanel() {
   scheduleSave();
 }
 
-// ---- Closed/maintenance message state (in-memory) ----
+
+
+let panelClient = null;
+let panelPayloadBuilder = null;
+
+export function setPanelClient(client, buildPayload) {
+  panelClient = client;
+  panelPayloadBuilder = buildPayload;
+}
+
+
+export async function triggerPanelSync() {
+  if (!panelClient || !panelPayloadBuilder) return;
+  try {
+    await syncPanelMessage(panelClient, panelPayloadBuilder());
+  } catch {}
+}
+
 
 let closedInfo = null;
 

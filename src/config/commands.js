@@ -10,4 +10,6 @@ export const ACTIVATOR_COMMANDS = [
   'reloadgames',
   'blacklist',
   'away',
+  'waitlist',
+  'preorder',
 ];
