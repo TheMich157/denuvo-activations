@@ -44,7 +44,10 @@ export async function handleRefresh(interaction) {
   const panel = getPanel();
   const msgId = interaction.message?.id != null ? String(interaction.message.id) : null;
   if (!panel || String(panel.message_id) !== msgId) {
-    await interaction.reply({ content: 'This panel has been closed.', flags: MessageFlags.Ephemeral }).catch(() => null);
+    await interaction.reply({
+      content: 'This panel is no longer active. An activator can post a new one with `/ticketpanel`, or use `/request` to open a ticket directly.',
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => null);
     return true;
   }
 

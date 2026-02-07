@@ -10,6 +10,7 @@ import {
 import { buildStockSelectMenus, getStockCount, getChunkLabel, getGlobalStockStats, getRestockStats } from '../services/stock.js';
 import { getGameDisplayName, getGameByAppId } from '../utils/games.js';
 import { getPanel, setPanel, clearPanel } from '../services/panel.js';
+import { deleteClosedMessage, cancelReopenTimer } from './closepanel.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
@@ -157,6 +158,7 @@ export async function execute(interaction) {
     return interaction.reply({ content: 'This command must be run in a server text channel.', flags: MessageFlags.Ephemeral });
   }
 
+  // Clean up any existing active panel message
   const existing = getPanel();
   if (existing) {
     try {
@@ -168,6 +170,10 @@ export async function execute(interaction) {
     } catch {}
     clearPanel();
   }
+
+  // Clean up any closed/maintenance message and cancel auto-reopen timer
+  cancelReopenTimer();
+  await deleteClosedMessage(interaction.client);
 
   const payload = buildPanelMessagePayload();
   const msg = await channel.send(payload);

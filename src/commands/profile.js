@@ -118,5 +118,5 @@ export async function execute(interaction) {
     embed.setFooter({ text: viewedBySuffix.slice(3) });
   }
 
-  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  await interaction.reply({ embeds: [embed] });
 }

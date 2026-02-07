@@ -174,13 +174,44 @@ export function processRestockQueue() {
   return rows;
 }
 
-export function cleanupOldRestockEntries() {
+/**
+ * Clean up expired/stale data across all tables.
+ * Called periodically by the restock interval.
+ */
+export function cleanupOldData() {
+  // Expired restock queue entries (processed > 1h ago)
   db.prepare(
     `DELETE FROM stock_restock_queue WHERE restock_at < datetime('now', '-1 hour')`
   ).run();
+
+  // Expired activation cooldowns
   db.prepare(
     `DELETE FROM activation_cooldowns WHERE cooldown_until < datetime('now')`
   ).run();
+
+  // Old daily activation counts (older than 3 days — only today matters)
+  db.prepare(
+    `DELETE FROM daily_activations WHERE date < date('now', '-3 days')`
+  ).run();
+
+  // Completed/failed/cancelled requests older than 30 days (keep recent history)
+  db.prepare(
+    `DELETE FROM requests WHERE status IN ('completed', 'failed', 'cancelled') AND created_at < datetime('now', '-30 days')`
+  ).run();
+
+  // Point transactions older than 90 days
+  db.prepare(
+    `DELETE FROM point_transactions WHERE created_at < datetime('now', '-90 days')`
+  ).run();
+
+  // Users with 0 points and no activity (no requests, no activator games, no transactions in 90 days)
+  db.prepare(`
+    DELETE FROM users WHERE points = 0
+      AND id NOT IN (SELECT DISTINCT buyer_id FROM requests)
+      AND id NOT IN (SELECT DISTINCT activator_id FROM activator_games)
+      AND id NOT IN (SELECT DISTINCT user_id FROM point_transactions)
+  `).run();
+
   scheduleSave();
 }
 

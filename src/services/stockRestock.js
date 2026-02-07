@@ -1,4 +1,4 @@
-import { processRestockQueue, cleanupOldRestockEntries } from './activators.js';
+import { processRestockQueue, cleanupOldData } from './activators.js';
 import { syncPanelMessage } from './panel.js';
 import { buildPanelMessagePayload } from '../commands/ticketpanel.js';
 import { stockConfig } from '../config/stock.js';
@@ -22,10 +22,10 @@ export function startStockRestock(client) {
     }));
     logRestockBatch(entries).catch((err) => log('Restock log failed:', err?.message));
   }
-  cleanupOldRestockEntries();
+  cleanupOldData();
   const intervalMs = stockConfig.restockCheckIntervalMs;
   intervalId = setInterval(async () => {
-    cleanupOldRestockEntries();
+    cleanupOldData();
     const rows = processRestockQueue();
     if (rows.length > 0) {
       log(`Restocked ${rows.length} activation slot(s)`);

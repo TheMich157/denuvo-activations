@@ -18,6 +18,24 @@ export function clearPanel() {
   scheduleSave();
 }
 
+// ---- Closed/maintenance message state (in-memory) ----
+
+let closedInfo = null;
+
+/** @param {{ channelId: string; messageId: string | null; reopenAt: number | null }} info */
+export function setClosedInfo(info) {
+  closedInfo = info ?? null;
+}
+
+/** @returns {{ channelId: string; messageId: string | null; reopenAt: number | null } | null} */
+export function getClosedInfo() {
+  return closedInfo;
+}
+
+export function clearClosedInfo() {
+  closedInfo = null;
+}
+
 /**
  * Sync the panel message with current DB state (stock, games).
  * Call on startup so the panel reflects correct state after bot restart.
