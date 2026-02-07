@@ -330,14 +330,79 @@ function buildFallbackOpenIdUrl() {
 }
 
 /**
+ * Extract a URL from a <meta http-equiv="refresh"> tag.
+ * Some Steam pages use meta refresh for JS-free redirects.
+ */
+function extractMetaRefresh(html, baseUrl) {
+  const m = html.match(/<meta[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["']?\d+;\s*url\s*=\s*([^\s"'>]+)/i);
+  if (m) {
+    try { return new URL(m[1], baseUrl).href; } catch {}
+  }
+  return null;
+}
+
+/**
+ * Search page HTML for OpenID assertion forms (openid.mode=id_res) or forms
+ * whose action points to drm.steam.run, and submit them.
+ * Returns true if we ended up on the DRM host.
+ */
+async function trySubmitAssertionForms(cheerio, html, baseUrl, jar) {
+  const $ = cheerio.load(html);
+  const forms = $('form').toArray();
+  if (!forms.length) return false;
+
+  // Prioritise OpenID assertion forms and forms pointing at drm host
+  const sorted = forms.sort((a, b) => {
+    const aAction = $(a).attr('action') || '';
+    const bAction = $(b).attr('action') || '';
+    const aIsAssertion = $(a).find('input[name="openid.mode"][value="id_res"]').length > 0 || isDrmHost(aAction);
+    const bIsAssertion = $(b).find('input[name="openid.mode"][value="id_res"]').length > 0 || isDrmHost(bAction);
+    return (bIsAssertion ? 1 : 0) - (aIsAssertion ? 1 : 0);
+  });
+
+  for (const formEl of sorted) {
+    const form = $(formEl);
+    const { action, params } = serializeForm($, form, baseUrl);
+    log('trySubmitAssertionForms: submitting form →', action, '| fields:', [...params.keys()].join(','));
+    try {
+      const res = await httpPost(action, params, jar);
+      if (isDrmHost(res.url)) {
+        log('trySubmitAssertionForms: reached drm site ✓');
+        return true;
+      }
+      // Follow one more level of chained forms
+      const $next = cheerio.load(res.body);
+      const nextForms = $next('form').toArray();
+      for (const nf of nextForms) {
+        const next = serializeForm($next, $(nf), res.url);
+        log('trySubmitAssertionForms: chained form →', next.action);
+        const nextRes = await httpPost(next.action, next.params, jar);
+        if (isDrmHost(nextRes.url)) {
+          log('trySubmitAssertionForms: chained form → drm site ✓');
+          return true;
+        }
+      }
+    } catch (e) {
+      log('trySubmitAssertionForms: form submission error:', e?.message);
+    }
+  }
+  return false;
+}
+
+/** Truncate a string for logging (first N chars). */
+function snippet(str, len = 300) {
+  if (!str) return '(empty)';
+  return str.length > len ? str.slice(0, len) + '…' : str;
+}
+
+/**
  * Login to drm.steam.run using Steam web cookies via the OpenID flow.
  *
  * Real flow observed:
  *   drm.steam.run  →  auth/steam_login.php  (302)
- *   →  steamcommunity.com/login/home/?goto=openid/loginform/?goto=<encoded OpenID URL>
- *      (JS-only page — returns 200, cannot follow redirect via HTTP)
- *   →  we extract the actual OpenID URL and hit it directly
- *   →  steamcommunity.com/openid/login?...  (processes w/ cookies, 302 to callback)
+ *   →  steamcommunity.com/openid/login?... OR /login/home/?goto=openid/loginform/?goto=<encoded>
+ *      (Steam may auto-redirect back, show an approval form, or show the JS login page)
+ *   →  we handle each case: direct redirect, assertion form, or extract+re-request
  *   →  drm.steam.run/auth/steam_callback.php  (sets session cookie)
  */
 async function drmLogin(steamCookieStrings) {
@@ -348,10 +413,28 @@ async function drmLogin(steamCookieStrings) {
     jar.importStrings(domain, steamCookieStrings);
   }
 
+  // Ensure sessionid cookie exists for all Steam domains — required for OpenID approval.
+  // steam-session sometimes omits it or returns one that doesn't match the web session.
+  for (const domain of STEAM_DOMAINS) {
+    if (!jar.cookies[domain]?.sessionid) {
+      const id = createHash('sha256')
+        .update(`${Date.now()}${Math.random()}`)
+        .digest('hex')
+        .slice(0, 24);
+      jar.set(domain, 'sessionid', id);
+      log('drmLogin: generated sessionid for', domain);
+    }
+  }
+
+  log('drmLogin: cookie domains:', Object.keys(jar.cookies).join(', '));
+  log('drmLogin: cookie names per domain:',
+    Object.entries(jar.cookies).map(([d, c]) => `${d}=[${Object.keys(c).join(',')}]`).join(' '));
+
   // 1. Visit drm site, check if already logged in
   log('drmLogin: visiting', drmConfig.baseUrl);
   const mainPage = await httpGet(drmConfig.baseUrl, jar);
   let $ = cheerio.load(mainPage.body);
+  log('drmLogin: main page status', mainPage.status, '| url', mainPage.url);
 
   const loginSels = drmConfig.selectors.loginLink.split(',').map(s => s.trim());
   let loginHref = null;
@@ -365,19 +448,45 @@ async function drmLogin(steamCookieStrings) {
     return jar;
   }
 
-  // 2. Follow the login link (drm → steam_login.php → steamcommunity.com/login/home/?goto=...)
+  // 2. Follow the login link (drm → steam_login.php → steamcommunity.com/…)
   const loginUrl = new URL(loginHref, drmConfig.baseUrl).href;
   log('drmLogin: following login link →', loginUrl);
   const loginRes = await httpGet(loginUrl, jar);
+  log('drmLogin: login chain ended at', loginRes.url, '| status', loginRes.status);
 
   if (isDrmHost(loginRes.url)) {
-    log('drmLogin: auto-approved via redirect');
+    log('drmLogin: auto-approved via redirect ✓');
     return jar;
+  }
+
+  // 2b. The login redirect may have landed on the OpenID assertion page directly
+  //     (Steam auto-approved with cookies and returned the id_res form).
+  //     We must check the response body for forms BEFORE re-requesting the URL,
+  //     because re-requesting may invalidate the one-time OpenID nonce.
+  if (await trySubmitAssertionForms(cheerio, loginRes.body, loginRes.url, jar)) {
+    log('drmLogin: assertion form from login redirect succeeded ✓');
+    return jar;
+  }
+
+  // Check for meta refresh redirect (JS-free redirect)
+  const metaUrl = extractMetaRefresh(loginRes.body, loginRes.url);
+  if (metaUrl) {
+    log('drmLogin: following meta refresh from login page →', metaUrl);
+    const metaRes = await httpGet(metaUrl, jar);
+    if (isDrmHost(metaRes.url)) {
+      log('drmLogin: meta refresh → drm site ✓');
+      return jar;
+    }
+    if (await trySubmitAssertionForms(cheerio, metaRes.body, metaRes.url, jar)) {
+      log('drmLogin: assertion form from meta refresh succeeded ✓');
+      return jar;
+    }
   }
 
   // 3. We're on Steam (usually /login/home/ which is JS-only).
   //    Extract the real OpenID endpoint URL from the nested goto params.
-  log('drmLogin: landed on Steam page →', loginRes.url);
+  log('drmLogin: on Steam page →', loginRes.url);
+  log('drmLogin: Steam page body snippet:', snippet(loginRes.body));
 
   let openIdUrl = extractOpenIdUrl(loginRes.url);
   if (!openIdUrl) {
@@ -386,48 +495,52 @@ async function drmLogin(steamCookieStrings) {
     const m = bodyDecoded.match(/(\/openid\/login\?[^\s"'<>]+)/);
     if (m) openIdUrl = new URL(m[1], 'https://steamcommunity.com').href;
   }
-  if (!openIdUrl) {
-    log('drmLogin: could not extract OpenID URL, trying fallback');
-    openIdUrl = buildFallbackOpenIdUrl();
-  }
 
-  log('drmLogin: hitting OpenID endpoint directly →', openIdUrl);
-  const openIdRes = await httpGet(openIdUrl, jar);
+  const fallbackUrl = buildFallbackOpenIdUrl();
+  const openIdUrls = [];
+  if (openIdUrl) openIdUrls.push(openIdUrl);
+  if (openIdUrl !== fallbackUrl) openIdUrls.push(fallbackUrl);
 
-  if (isDrmHost(openIdRes.url)) {
-    log('drmLogin: OpenID redirected to drm site ✓');
-    return jar;
-  }
+  let lastOpenIdUrl = null;
+  let lastOpenIdStatus = null;
 
-  // 4. OpenID may have returned a page with a form (approval page or auto-submit page)
-  $ = cheerio.load(openIdRes.body);
-  const forms = $('form').toArray();
-  log('drmLogin: OpenID page has', forms.length, 'form(s)');
+  for (const url of openIdUrls) {
+    log('drmLogin: hitting OpenID endpoint →', url);
+    try {
+      const openIdRes = await httpGet(url, jar);
+      lastOpenIdUrl = openIdRes.url;
+      lastOpenIdStatus = openIdRes.status;
+      log('drmLogin: OpenID response status', openIdRes.status, '| url', openIdRes.url);
 
-  for (const formEl of forms) {
-    const form = $(formEl);
-    const { action, params } = serializeForm($, form, openIdRes.url);
-    log('drmLogin: submitting form →', action);
-    const formRes = await httpPost(action, params, jar);
-    if (isDrmHost(formRes.url)) {
-      log('drmLogin: form redirected to drm site ✓');
-      return jar;
-    }
-    // One more level of chained forms
-    const $next = cheerio.load(formRes.body);
-    const nextForm = $next('form').first();
-    if (nextForm.length) {
-      const next = serializeForm($next, nextForm, formRes.url);
-      log('drmLogin: chained form →', next.action);
-      const nextRes = await httpPost(next.action, next.params, jar);
-      if (isDrmHost(nextRes.url)) {
-        log('drmLogin: chained form → drm site ✓');
+      if (isDrmHost(openIdRes.url)) {
+        log('drmLogin: OpenID redirected to drm site ✓');
         return jar;
       }
+
+      // Try assertion forms on the OpenID response page
+      if (await trySubmitAssertionForms(cheerio, openIdRes.body, openIdRes.url, jar)) {
+        log('drmLogin: assertion form from OpenID page succeeded ✓');
+        return jar;
+      }
+
+      // Check meta refresh on OpenID page
+      const openIdMeta = extractMetaRefresh(openIdRes.body, openIdRes.url);
+      if (openIdMeta) {
+        log('drmLogin: following meta refresh from OpenID page →', openIdMeta);
+        const metaRes = await httpGet(openIdMeta, jar);
+        if (isDrmHost(metaRes.url)) {
+          log('drmLogin: OpenID meta refresh → drm site ✓');
+          return jar;
+        }
+      }
+
+      log('drmLogin: OpenID page body snippet:', snippet(openIdRes.body));
+    } catch (e) {
+      log('drmLogin: OpenID attempt failed:', e?.message);
     }
   }
 
-  // 5. Last resort: re-check main page in case cookies were set along the way
+  // 4. Last resort: re-check main page in case cookies were set along the way
   const recheck = await httpGet(drmConfig.baseUrl, jar);
   $ = cheerio.load(recheck.body);
   let stillNeedsLogin = false;
@@ -439,8 +552,13 @@ async function drmLogin(steamCookieStrings) {
     return jar;
   }
 
-  log('drmLogin: FAILED — final URL was', openIdRes.url);
-  throw new Error('Could not authenticate with drm.steam.run via Steam OpenID. Try using **Done** to paste the code manually.');
+  log('drmLogin: FAILED — last OpenID url:', lastOpenIdUrl, '| status:', lastOpenIdStatus);
+  log('drmLogin: FAILED — cookie domains:', Object.keys(jar.cookies).join(', '));
+  throw new Error(
+    'Could not authenticate with drm.steam.run via Steam OpenID.' +
+    (lastOpenIdUrl ? ` (Steam landed on ${new URL(lastOpenIdUrl).pathname})` : '') +
+    ' Try using **Done** to paste the code manually.'
+  );
 }
 
 /**
