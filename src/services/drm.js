@@ -52,13 +52,28 @@ function deleteSession(username) {
 
 /* ---------- simple cookie jar ---------- */
 
+/**
+ * Extract Set-Cookie header values from a fetch Response.
+ * Node 18.14+ has getSetCookie(); older versions fall back to raw header parsing.
+ */
+function extractSetCookies(response) {
+  if (typeof response.headers.getSetCookie === 'function') {
+    return response.headers.getSetCookie();
+  }
+  // Fallback: parse the combined header (comma-split, but careful with Expires dates)
+  const raw = response.headers.get('set-cookie');
+  if (!raw) return [];
+  // Split on ", <token>=" but not inside "Expires=Thu, 01 Jan ..."
+  return raw.split(/,\s*(?=[A-Za-z0-9_.-]+=)/).filter(Boolean);
+}
+
 class CookieJar {
   constructor() { this.cookies = {}; }
 
-  /** Parse Set-Cookie headers from a Response and store them. */
+  /** Parse Set-Cookie headers from a Response and store them keyed by host. */
   addFromResponse(url, response) {
     const host = new URL(url).hostname;
-    const raw = response.headers.getSetCookie?.() ?? [];
+    const raw = extractSetCookies(response);
     if (!this.cookies[host]) this.cookies[host] = {};
     for (const h of raw) {
       const [pair] = h.split(';');
@@ -68,16 +83,25 @@ class CookieJar {
       const name = pair.slice(0, eq).trim();
       const value = pair.slice(eq + 1).trim();
       if (name) this.cookies[host][name] = value;
+
+      // Also honour explicit Domain= attribute so the cookie is sent to subdomains
+      const domainMatch = h.match(/;\s*[Dd]omain=\.?([^;]+)/);
+      if (domainMatch) {
+        const d = domainMatch[1].trim().toLowerCase();
+        if (d && d !== host) {
+          if (!this.cookies[d]) this.cookies[d] = {};
+          this.cookies[d][name] = value;
+        }
+      }
     }
   }
 
-  /** Set an explicit cookie for a host. */
   set(host, name, value) {
     if (!this.cookies[host]) this.cookies[host] = {};
     this.cookies[host][name] = value;
   }
 
-  /** Build Cookie header string for a URL. */
+  /** Build Cookie header string for a URL — matches exact host and parent domain. */
   headerFor(url) {
     const host = new URL(url).hostname;
     const parts = [];
@@ -111,20 +135,18 @@ class CookieJar {
 /* ---------- HTTP helpers ---------- */
 
 const UA = drmConfig.userAgent;
+const REDIRECT_CODES = [301, 302, 303, 307, 308];
 
-/**
- * Fetch with cookie jar, following redirects manually so cookies are tracked at every hop.
- */
-async function httpGet(url, jar, { maxRedirects = 12 } = {}) {
+async function httpGet(url, jar, { maxRedirects = 15 } = {}) {
   let current = url;
   for (let i = 0; i < maxRedirects; i++) {
     const res = await fetch(current, {
       method: 'GET',
-      headers: { 'User-Agent': UA, Cookie: jar.headerFor(current) },
+      headers: { 'User-Agent': UA, Cookie: jar.headerFor(current), Accept: 'text/html,*/*' },
       redirect: 'manual',
     });
     jar.addFromResponse(current, res);
-    if ([301, 302, 303, 307, 308].includes(res.status)) {
+    if (REDIRECT_CODES.includes(res.status)) {
       const loc = res.headers.get('location');
       if (!loc) break;
       current = new URL(loc, current).href;
@@ -135,19 +157,11 @@ async function httpGet(url, jar, { maxRedirects = 12 } = {}) {
   throw new Error('Too many redirects');
 }
 
-async function httpPost(url, formData, jar, { maxRedirects = 12, contentType } = {}) {
-  let body;
-  let ct = contentType;
-  if (typeof formData === 'string') {
-    body = formData;
-    ct = ct || 'application/x-www-form-urlencoded';
-  } else if (formData instanceof URLSearchParams) {
-    body = formData.toString();
-    ct = ct || 'application/x-www-form-urlencoded';
-  } else {
-    body = new URLSearchParams(formData).toString();
-    ct = ct || 'application/x-www-form-urlencoded';
-  }
+async function httpPost(url, formData, jar, { maxRedirects = 15 } = {}) {
+  const body =
+    typeof formData === 'string' ? formData
+      : formData instanceof URLSearchParams ? formData.toString()
+        : new URLSearchParams(formData).toString();
 
   let current = url;
   for (let i = 0; i < maxRedirects; i++) {
@@ -157,13 +171,14 @@ async function httpPost(url, formData, jar, { maxRedirects = 12, contentType } =
       headers: {
         'User-Agent': UA,
         Cookie: jar.headerFor(current),
-        ...(isFirst ? { 'Content-Type': ct } : {}),
+        Accept: 'text/html,*/*',
+        ...(isFirst ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
       },
       body: isFirst ? body : undefined,
       redirect: 'manual',
     });
     jar.addFromResponse(current, res);
-    if ([301, 302, 303, 307, 308].includes(res.status)) {
+    if (REDIRECT_CODES.includes(res.status)) {
       const loc = res.headers.get('location');
       if (!loc) break;
       current = new URL(loc, current).href;
@@ -172,6 +187,18 @@ async function httpPost(url, formData, jar, { maxRedirects = 12, contentType } =
     return { url: current, status: res.status, body: await res.text(), headers: res.headers };
   }
   throw new Error('Too many redirects');
+}
+
+/** Collect all hidden + submit inputs from a cheerio form element into URLSearchParams. */
+function serializeForm($, form, base) {
+  const action = new URL(form.attr('action') || '', base).href;
+  const params = new URLSearchParams();
+  form.find('input').each(function () {
+    const n = $(this).attr('name');
+    const v = $(this).val() || '';
+    if (n) params.set(n, v);
+  });
+  return { action, params };
 }
 
 /* ---------- input validation ---------- */
@@ -198,11 +225,6 @@ function validateCredentialsOnly(credentials) {
 
 /* ---------- Steam auth via steam-session ---------- */
 
-/**
- * Authenticate with Steam and return { cookies, refreshToken }.
- * `cookies` is an array of "name=value" strings for steamcommunity.com.
- * If a confirmation code is needed and not provided, throws with a recognizable message.
- */
 async function steamAuth(username, password, confirmCode = null) {
   const { LoginSession, EAuthTokenPlatformType } = await import('steam-session');
   const session = new LoginSession(EAuthTokenPlatformType.WebBrowser);
@@ -214,7 +236,7 @@ async function steamAuth(username, password, confirmCode = null) {
 
   if (result.actionRequired) {
     const actions = result.validActions || [];
-    const emailAction = actions.find(a => a.type === 2); // EAuthSessionGuardType.EmailCode
+    const emailAction = actions.find(a => a.type === 2);
     const domain = emailAction?.detail || 'your email';
     if (!confirmCode) {
       throw new Error(`Confirmation code required. Steam sent a code to ${domain}.`);
@@ -222,7 +244,6 @@ async function steamAuth(username, password, confirmCode = null) {
     throw new Error('The confirmation code was rejected. Check your email for a fresh code and try again.');
   }
 
-  // Wait for authenticated event (polling happens internally)
   const cookies = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Steam authentication timed out after 60 s.')), 60_000);
     session.on('authenticated', async () => {
@@ -237,17 +258,12 @@ async function steamAuth(username, password, confirmCode = null) {
   return { cookies, refreshToken: session.refreshToken };
 }
 
-/**
- * Restore a session from a saved refresh token.
- * Returns cookies array or null if the token is expired/invalid.
- */
 async function steamAuthFromToken(refreshToken) {
   const { LoginSession, EAuthTokenPlatformType } = await import('steam-session');
   try {
     const session = new LoginSession(EAuthTokenPlatformType.WebBrowser);
     session.refreshToken = refreshToken;
-    const cookies = await session.getWebCookies();
-    return cookies;
+    return await session.getWebCookies();
   } catch (err) {
     log('Refresh token expired or invalid:', err?.message);
     return null;
@@ -256,113 +272,125 @@ async function steamAuthFromToken(refreshToken) {
 
 /* ---------- drm.steam.run interaction (HTTP) ---------- */
 
+const DRM_HOST = new URL(drmConfig.baseUrl).hostname;
+const STEAM_DOMAINS = [
+  'steamcommunity.com',
+  'store.steampowered.com',
+  'login.steampowered.com',
+  'help.steampowered.com',
+];
+
+/** Returns true when the host belongs to drm.steam.run. */
+function isDrmHost(urlStr) {
+  try { return new URL(urlStr).hostname.includes(DRM_HOST); }
+  catch { return false; }
+}
+
 /**
  * Login to drm.steam.run using Steam web cookies via the OpenID flow.
- * Returns a CookieJar with valid drm.steam.run session cookies.
+ * The flow is: drm site → Steam OpenID → Steam auto-submits a form → back to drm site.
  */
 async function drmLogin(steamCookieStrings) {
   const jar = new CookieJar();
-
-  // Put Steam cookies into the jar for steamcommunity.com
-  jar.importStrings('steamcommunity.com', steamCookieStrings);
-  // Also need them for store.steampowered.com and login.steampowered.com
-  jar.importStrings('store.steampowered.com', steamCookieStrings);
-  jar.importStrings('login.steampowered.com', steamCookieStrings);
-
-  // Step 1: visit drm site to get the login redirect URL
-  log('Visiting', drmConfig.baseUrl);
-  const mainPage = await httpGet(drmConfig.baseUrl, jar);
   const cheerio = await import('cheerio');
+
+  // Seed Steam cookies for every relevant Steam domain
+  for (const domain of STEAM_DOMAINS) {
+    jar.importStrings(domain, steamCookieStrings);
+  }
+
+  // 1. Visit drm site, check if already logged in
+  log('drmLogin: visiting', drmConfig.baseUrl);
+  const mainPage = await httpGet(drmConfig.baseUrl, jar);
   let $ = cheerio.load(mainPage.body);
 
-  // Check if already logged in (no login link visible)
-  const selectorParts = drmConfig.selectors.loginLink.split(',').map(s => s.trim());
+  const loginSels = drmConfig.selectors.loginLink.split(',').map(s => s.trim());
   let loginHref = null;
-  for (const sel of selectorParts) {
+  for (const sel of loginSels) {
     const el = $(sel).first();
-    if (el.length && el.attr('href')) {
-      loginHref = el.attr('href');
-      break;
-    }
+    if (el.length && el.attr('href')) { loginHref = el.attr('href'); break; }
   }
 
   if (!loginHref) {
-    log('Already logged in on drm site (no login link found)');
+    log('drmLogin: no login link → already logged in');
     return jar;
   }
 
-  // Step 2: follow the login link (may redirect to Steam OpenID)
+  // 2. Follow the login link
   const loginUrl = new URL(loginHref, drmConfig.baseUrl).href;
-  log('Following login link:', loginUrl);
-  const loginResult = await httpGet(loginUrl, jar);
+  log('drmLogin: following login link →', loginUrl);
+  const loginRes = await httpGet(loginUrl, jar);
 
-  // After following all redirects we should land back on drm site (logged in)
-  // If we ended up on Steam (OpenID page) it means cookies auto-approved and we got redirected
-  // Check where we ended up
-  const finalHost = new URL(loginResult.url).hostname;
-  const drmHost = new URL(drmConfig.baseUrl).hostname;
-
-  if (finalHost.includes(drmHost)) {
-    log('Steam OpenID auto-approved, now logged in on drm site');
+  if (isDrmHost(loginRes.url)) {
+    log('drmLogin: OpenID auto-approved via redirect');
     return jar;
   }
 
-  // If we're on a Steam OpenID page, look for an approval/allow form
-  $ = cheerio.load(loginResult.body);
-  const allowForm = $('form').filter(function () {
-    const action = $(this).attr('action') || '';
-    return action.includes('openid') || $(this).find('input[name="action"]').val() === 'allow';
-  }).first();
+  // 3. We landed on a Steam page — find and submit forms until we're back on drm site
+  log('drmLogin: on Steam page', loginRes.url, '— looking for forms to submit');
+  $ = cheerio.load(loginRes.body);
 
-  if (allowForm.length) {
-    log('Steam OpenID needs manual approval, submitting form');
-    const action = new URL(allowForm.attr('action') || loginResult.url, loginResult.url).href;
-    const params = new URLSearchParams();
-    allowForm.find('input[type="hidden"], input[type="submit"]').each(function () {
-      const n = $(this).attr('name');
-      const v = $(this).val();
-      if (n) params.set(n, v || '');
-    });
-    // Set the allow action
-    params.set('action', 'allow');
+  // Try submitting every form on the page (Steam puts a single auto-submit form when logged in)
+  const forms = $('form').toArray();
+  log('drmLogin: found', forms.length, 'form(s) on Steam page');
 
-    const approvalResult = await httpPost(action, params, jar);
-    const approvalHost = new URL(approvalResult.url).hostname;
-    if (approvalHost.includes(drmHost)) {
-      log('OpenID approved, now logged in on drm site');
+  for (const formEl of forms) {
+    const form = $(formEl);
+    const { action, params } = serializeForm($, form, loginRes.url);
+    log('drmLogin: submitting form →', action, `(${params.toString().length} bytes)`);
+
+    const formRes = await httpPost(action, params, jar);
+
+    // Landed back on drm site? Done.
+    if (isDrmHost(formRes.url)) {
+      log('drmLogin: form redirected back to drm site ✓');
       return jar;
+    }
+
+    // Sometimes the response itself contains another form (nested redirect)
+    const $next = cheerio.load(formRes.body);
+    const nextForm = $next('form').first();
+    if (nextForm.length) {
+      const next = serializeForm($next, nextForm, formRes.url);
+      log('drmLogin: submitting chained form →', next.action);
+      const nextRes = await httpPost(next.action, next.params, jar);
+      if (isDrmHost(nextRes.url)) {
+        log('drmLogin: chained form redirected back to drm site ✓');
+        return jar;
+      }
     }
   }
 
-  // Last resort: check if the redirect chain eventually put us on the drm site
-  // by re-fetching the main page with the cookies we have
+  // 4. Last resort: re-fetch drm site — maybe our jar already has the right cookies now
+  log('drmLogin: no form redirected us back, re-checking main page');
   const recheck = await httpGet(drmConfig.baseUrl, jar);
   $ = cheerio.load(recheck.body);
   let stillNeedsLogin = false;
-  for (const sel of selectorParts) {
+  for (const sel of loginSels) {
     if ($(sel).first().length) { stillNeedsLogin = true; break; }
   }
-  if (stillNeedsLogin) {
-    throw new Error('Could not authenticate with drm.steam.run via Steam OpenID. Try using **Done** to paste the code manually.');
+  if (!stillNeedsLogin) {
+    log('drmLogin: logged in after re-check ✓');
+    return jar;
   }
 
-  log('Logged in on drm site after re-check');
-  return jar;
+  // Log what we saw for debugging
+  const snippet = recheck.body.slice(0, 500).replace(/\s+/g, ' ');
+  log('drmLogin: FAILED — page snippet:', snippet);
+  throw new Error('Could not authenticate with drm.steam.run via Steam OpenID. Try using **Done** to paste the code manually.');
 }
 
 /**
  * Extract an auth code from drm.steam.run for a given game.
- * Expects the jar to already have valid session cookies.
  */
 async function drmExtractCode(jar, gameAppId) {
   const cheerio = await import('cheerio');
 
-  // Step 1: load main page
-  log('Loading drm site for code extraction');
+  log('drmExtractCode: loading main page');
   const mainRes = await httpGet(drmConfig.baseUrl, jar);
   let $ = cheerio.load(mainRes.body);
 
-  // Find the game ID form/input
+  // Find game ID input
   const gameInputSels = drmConfig.selectors.gameIdInput.split(',').map(s => s.trim());
   let gameInput = null;
   for (const sel of gameInputSels) {
@@ -377,72 +405,62 @@ async function drmExtractCode(jar, gameAppId) {
   const inputName = gameInput.attr('name') || 'appid';
   const form = gameInput.closest('form');
 
-  // Try form-based submission
+  // Form-based submission
   if (form.length) {
     const action = new URL(form.attr('action') || '', drmConfig.baseUrl).href;
     const method = (form.attr('method') || 'POST').toUpperCase();
     const params = new URLSearchParams();
-
-    // Collect all form fields
     form.find('input, select, textarea').each(function () {
       const n = $(this).attr('name');
       if (!n) return;
-      const type = $(this).attr('type') || '';
-      if (type === 'submit') return; // skip submit buttons
+      if ($(this).attr('type') === 'submit') return;
       params.set(n, $(this).val() || '');
     });
     params.set(inputName, String(gameAppId));
 
-    log('Submitting game ID via form to', action);
+    log('drmExtractCode: submitting game ID via form →', action);
     const res = method === 'GET'
       ? await httpGet(`${action}?${params}`, jar)
       : await httpPost(action, params, jar);
     $ = cheerio.load(res.body);
 
-    // Look for code immediately
     const code = findCodeInPage($);
     if (code) return code;
 
-    // Try sequential button actions (Extract → Fill → Submit)
-    const nextRes = await trySequentialSubmits($, jar, drmConfig.baseUrl);
-    if (nextRes) return nextRes;
+    const seqCode = await trySequentialSubmits($, jar, drmConfig.baseUrl);
+    if (seqCode) return seqCode;
   }
 
-  // No form: try posting directly to the base URL
-  log('No form found, trying direct POST');
+  // Fallback: direct POST
+  log('drmExtractCode: no form found, trying direct POST');
   const directRes = await httpPost(drmConfig.baseUrl, { [inputName]: String(gameAppId) }, jar);
   $ = cheerio.load(directRes.body);
 
-  const code = findCodeInPage($);
+  let code = findCodeInPage($);
   if (code) return code;
 
-  const nextRes = await trySequentialSubmits($, jar, drmConfig.baseUrl);
-  if (nextRes) return nextRes;
+  const seqCode = await trySequentialSubmits($, jar, drmConfig.baseUrl);
+  if (seqCode) return seqCode;
 
   // Try common API patterns
   for (const apiPath of ['/api/extract', '/extract', '/api/generate', '/generate']) {
     try {
       const apiUrl = new URL(apiPath, drmConfig.baseUrl).href;
       const apiRes = await httpPost(apiUrl, { appid: String(gameAppId), gameid: String(gameAppId) }, jar);
-      // Try JSON response
       try {
         const json = JSON.parse(apiRes.body);
-        const codeVal = json.code || json.auth_code || json.token || json.result;
-        if (typeof codeVal === 'string' && codeVal.length >= MIN_CODE_LENGTH) return codeVal;
+        const val = json.code || json.auth_code || json.token || json.result;
+        if (typeof val === 'string' && val.length >= MIN_CODE_LENGTH) return val;
       } catch {}
-      // Try HTML response
       const $api = cheerio.load(apiRes.body);
-      const apiCode = findCodeInPage($api);
-      if (apiCode) return apiCode;
+      code = findCodeInPage($api);
+      if (code) return code;
     } catch {}
   }
 
-  throw new Error('Could not extract authorization code. The site may have changed or requires a browser. Use **Done** to paste the code from drm.steam.run manually.');
+  throw new Error('Could not extract authorization code. The site may have changed. Use **Done** to paste the code from drm.steam.run manually.');
 }
 
-/**
- * Try finding and submitting Extract → Fill → Submit forms sequentially.
- */
 async function trySequentialSubmits($, jar, baseUrl) {
   const cheerio = await import('cheerio');
   const buttonTexts = [
@@ -453,7 +471,7 @@ async function trySequentialSubmits($, jar, baseUrl) {
 
   for (const texts of buttonTexts) {
     for (const text of texts) {
-      const btn = $(`button, input[type="submit"]`).filter(function () {
+      const btn = $('button, input[type="submit"]').filter(function () {
         const t = $(this).text().trim();
         const v = $(this).val() || '';
         return t.includes(text) || v.includes(text);
@@ -464,34 +482,23 @@ async function trySequentialSubmits($, jar, baseUrl) {
       const form = btn.closest('form');
       if (!form.length) continue;
 
-      const action = new URL(form.attr('action') || '', baseUrl).href;
-      const params = new URLSearchParams();
-      form.find('input, select, textarea').each(function () {
-        const n = $(this).attr('name');
-        if (!n) return;
-        params.set(n, $(this).val() || '');
-      });
-      // Include the button's name/value if it has one (some forms use submit button value)
+      const { action, params } = serializeForm($, form, baseUrl);
       const btnName = btn.attr('name');
       if (btnName) params.set(btnName, btn.val() || text);
 
-      log(`Submitting "${text}" form to`, action);
+      log(`drmExtractCode: submitting "${text}" form →`, action);
       const res = await httpPost(action, params, jar);
       $ = cheerio.load(res.body);
 
       const code = findCodeInPage($);
       if (code) return code;
-      break; // Move to next button group
+      break;
     }
   }
   return null;
 }
 
-/**
- * Search the page HTML for an authorization code.
- */
 function findCodeInPage($) {
-  // 1. Try configured selectors
   const codeSels = drmConfig.selectors.codeOutput.split(',').map(s => s.trim());
   for (const sel of codeSels) {
     const el = $(sel).first();
@@ -499,8 +506,6 @@ function findCodeInPage($) {
     const val = (el.val() || el.text() || '').trim();
     if (val.length >= MIN_CODE_LENGTH) return val;
   }
-
-  // 2. Regex fallback on entire body text
   const bodyText = $('body').text() || '';
   const match = bodyText.match(CODE_FALLBACK_REGEX);
   return match ? match[0] : null;
@@ -508,9 +513,6 @@ function findCodeInPage($) {
 
 /* ---------- public API ---------- */
 
-/**
- * Check whether automated code generation is available (steam-session installed).
- */
 export async function isAutomatedAvailable() {
   try {
     await import('steam-session');
@@ -520,10 +522,6 @@ export async function isAutomatedAvailable() {
   }
 }
 
-/**
- * Test Steam login with the given credentials.
- * @returns {{ ok: boolean; requires2FA?: boolean; error?: string }}
- */
 export async function testLogin(credentials) {
   const available = await isAutomatedAvailable();
   if (!available) {
@@ -541,14 +539,13 @@ export async function testLogin(credentials) {
 
   try {
     const { cookies, refreshToken } = await steamAuth(username, password, null);
-    // Save session for reuse
     saveSession(username, { refreshToken, steamCookies: cookies });
-    log('Test login: success, session saved');
+    log('testLogin: success, session saved');
     return { ok: true };
   } catch (err) {
     const msg = err?.message || 'Unknown error';
     if (msg.includes('Confirmation code required')) {
-      log('Test login: credentials accepted, confirmation code needed');
+      log('testLogin: credentials accepted, confirmation code needed');
       return { ok: true, requires2FA: true };
     }
     if (msg.includes('InvalidPassword') || msg.includes('invalid_password') || msg.toLowerCase().includes('incorrect')) {
@@ -557,20 +554,11 @@ export async function testLogin(credentials) {
     if (msg.includes('RateLimitExceeded') || msg.includes('rate limit')) {
       return { ok: false, error: 'Steam rate limit hit. Wait a few minutes and try again.' };
     }
-    log('Test login error:', msg);
+    log('testLogin error:', msg);
     return { ok: false, error: msg };
   }
 }
 
-/**
- * Generate an auth code via drm.steam.run using HTTP (no browser).
- * Reuses saved Steam session (refresh token) when available.
- *
- * @param {number} gameAppId
- * @param {{ username: string; password: string }} credentials
- * @param {string | null} confirmCode - 5-digit email code, only when session needs it
- * @returns {Promise<string>}
- */
 export async function generateAuthCode(gameAppId, credentials, confirmCode = null) {
   const available = await isAutomatedAvailable();
   if (!available) {
@@ -582,24 +570,50 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
 
   const { gameAppId: appId, username, password } = validateInputs(gameAppId, credentials);
   const saved = loadSession(username);
-
   let steamCookies = null;
 
-  // Step 1: try saved refresh token first
+  // 1. Try saved drm cookies directly (fastest path — skip Steam entirely)
+  if (saved?.drmCookies && !confirmCode) {
+    log('generateAuthCode: trying saved drm cookies');
+    const jar = CookieJar.fromJSON(saved.drmCookies);
+    try {
+      const cheerio = await import('cheerio');
+      const check = await httpGet(drmConfig.baseUrl, jar);
+      const $ = cheerio.load(check.body);
+      const loginSels = drmConfig.selectors.loginLink.split(',').map(s => s.trim());
+      let needsLogin = false;
+      for (const sel of loginSels) {
+        if ($(sel).first().length) { needsLogin = true; break; }
+      }
+      if (!needsLogin) {
+        log('generateAuthCode: saved drm cookies still valid');
+        const code = await drmExtractCode(jar, appId);
+        if (code && code.length >= MIN_CODE_LENGTH) {
+          saveSession(username, { ...saved, drmCookies: jar.toJSON() });
+          log('Code extracted successfully');
+          return code;
+        }
+      }
+    } catch (e) {
+      log('generateAuthCode: saved drm cookies failed:', e?.message);
+    }
+  }
+
+  // 2. Try saved refresh token
   if (saved?.refreshToken && !confirmCode) {
-    log('Trying saved refresh token for', username);
+    log('generateAuthCode: trying saved refresh token');
     steamCookies = await steamAuthFromToken(saved.refreshToken);
     if (steamCookies) {
-      log('Refresh token still valid, got cookies');
+      log('generateAuthCode: refresh token valid');
     } else {
-      log('Refresh token expired, need fresh login');
+      log('generateAuthCode: refresh token expired');
       deleteSession(username);
     }
   }
 
-  // Step 2: fresh login if needed
+  // 3. Fresh login if needed
   if (!steamCookies) {
-    log('Performing fresh Steam login for', username);
+    log('generateAuthCode: performing fresh Steam login');
     try {
       const result = await steamAuth(username, password, confirmCode);
       steamCookies = result.cookies;
@@ -614,7 +628,7 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
     }
   }
 
-  // Step 3: login to drm.steam.run via OpenID
+  // 4. Login to drm.steam.run via OpenID
   let jar;
   try {
     jar = await drmLogin(steamCookies);
@@ -622,13 +636,12 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
     throw new Error(`Could not login to drm.steam.run. ${err?.message || 'Unknown error'}`);
   }
 
-  // Step 4: extract the code
+  // 5. Extract the code
   const code = await drmExtractCode(jar, appId);
   if (!code || code.length < MIN_CODE_LENGTH) {
     throw new Error('Could not extract authorization code. The site may have changed. Use **Done** to paste the code from drm.steam.run manually.');
   }
 
-  // Persist drm cookies for faster next run
   const freshSession = loadSession(username);
   if (freshSession?.refreshToken) {
     saveSession(username, { ...freshSession, drmCookies: jar.toJSON() });
