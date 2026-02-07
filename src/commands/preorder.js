@@ -39,6 +39,11 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub
+      .setName('guide')
+      .setDescription('Post a public guide explaining preorders and payment verification')
+  )
+  .addSubcommand((sub) =>
+    sub
       .setName('close')
       .setDescription('Close a preorder')
       .addIntegerOption((o) => o.setName('id').setDescription('Preorder ID').setRequired(true))
@@ -135,6 +140,83 @@ export async function execute(interaction) {
       : `✅ Preorder **#${preorderId}** created for **${gameName}** ($${price.toFixed(2)}).`;
 
     return interaction.reply({ content: replyText, flags: MessageFlags.Ephemeral });
+  }
+
+  if (sub === 'guide') {
+    const openPreorders = getOpenPreorders();
+    const preorderList = openPreorders.length > 0
+      ? openPreorders.map((p) => {
+          const claims = getClaimsForPreorder(p.id);
+          const verified = claims.filter((c) => c.verified === 1).length;
+          const threadLink = p.thread_id ? ` → <#${p.thread_id}>` : '';
+          return `> **#${p.id}** — **${p.game_name}** • $${p.price.toFixed(2)} • ${verified} verified${threadLink}`;
+        }).join('\n')
+      : '> *No open preorders right now. Check back soon!*';
+
+    const guideEmbed = new EmbedBuilder()
+      .setColor(0xe91e63)
+      .setTitle('🛒 How Preorders Work')
+      .setDescription(
+        [
+          'Preorders let you request **upcoming or high-demand games** before they\'re available in the regular panel. Here\'s how:',
+          '',
+          '**━━━━━━━━━━━━━━━━━━━━━━**',
+          '',
+          '**Step 1 — Find a Preorder**',
+          config.preorderChannelId
+            ? `Browse the open preorders in <#${config.preorderChannelId}> or see the list below.`
+            : 'Check the open preorders list below.',
+          '',
+          '**Step 2 — Donate on Ko-fi**',
+          `Go to **[Ko-fi](${config.kofiUrl})** and donate the required minimum amount (usually **$${config.minDonation}+**).`,
+          'Make sure to include your **Discord username** or the **preorder number** in the Ko-fi message.',
+          '',
+          '**Step 3 — Post Your Proof**',
+          config.tipVerifyChannelId
+            ? `Head to <#${config.tipVerifyChannelId}> and post a **screenshot** of your Ko-fi receipt.`
+            : 'Post a **screenshot** of your Ko-fi receipt in the tip verification channel.',
+          'Include the preorder number in your message, e.g.:',
+          '```',
+          '#5',
+          'preorder 5',
+          '```',
+          '',
+          '**Step 4 — Automatic Verification**',
+          'The bot will scan your screenshot and **auto-verify** your payment if it detects:',
+          '• A Ko-fi/tip/donation receipt',
+          '• The correct dollar amount ($5+ or whatever the preorder requires)',
+          '',
+          'If auto-verification fails, an activator will **manually review** your proof.',
+          '',
+          '**Step 5 — Get Your Game**',
+          'Once enough people join and the preorder is **fulfilled**, you\'ll receive a DM and your activation will be handled!',
+          '',
+          '**━━━━━━━━━━━━━━━━━━━━━━**',
+        ].join('\n')
+      )
+      .setTimestamp();
+
+    const currentEmbed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle('📋 Current Open Preorders')
+      .setDescription(preorderList)
+      .setTimestamp();
+
+    const components = [];
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('Donate on Ko-fi')
+        .setStyle(ButtonStyle.Link)
+        .setURL(config.kofiUrl)
+        .setEmoji('☕'),
+    );
+    components.push(row);
+
+    await interaction.reply({
+      embeds: [guideEmbed, currentEmbed],
+      components,
+    });
+    return;
   }
 
   if (sub === 'list') {
