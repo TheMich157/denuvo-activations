@@ -103,25 +103,27 @@ export async function completeAndNotifyTicket(req, authCode, client) {
   } catch {}
 
   const expiresAt = Math.floor(Date.now() / 1000) + VALIDITY_MINUTES * 60;
+  const codeBlock = `\`\`\`\n${authCode}\n\`\`\``;
   const embed = new EmbedBuilder()
     .setColor(0x57f287)
     .setTitle('✅ Authorization code ready')
     .setDescription(
       [
-        `Here is your authorization code for **${req.game_name}**. Select the code below and copy it.`,
+        `Use this code in your game or at **drm.steam.run** — valid for **${VALIDITY_MINUTES} minutes**.`,
         '',
-        '**If you have a problem with it, press Help** to request assistance.',
+        '**Copy the code above** ↑ or use the **📋 Copy code** button below.',
+        '',
+        '**If you have a problem,** press **Help** to request assistance.',
       ].join('\n')
     )
     .addFields(
-      { name: 'Code', value: `\`\`\`\n${authCode}\n\`\`\``, inline: false },
       {
-        name: '⏱️ Validity',
-        value: `This code is valid for **${VALIDITY_MINUTES} minutes**. Expires <t:${expiresAt}:R> (<t:${expiresAt}:f>).`,
-        inline: false,
-      }
+        name: '⏱️ Expires',
+        value: `<t:${expiresAt}:R> (<t:${expiresAt}:f>)`,
+        inline: true,
+      },
+      { name: '📋 Status', value: 'Code ready', inline: true }
     )
-    .addFields({ name: '📋 Status', value: 'Code ready', inline: true })
     .setFooter({ text: `Ticket #${req.id.slice(0, 8).toUpperCase()} • Copy code or press Help if you need assistance` });
   const copyRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -138,7 +140,14 @@ export async function completeAndNotifyTicket(req, authCode, client) {
       .setStyle(ButtonStyle.Secondary)
   );
   await ticketChannel.send({
-    content: `<@${req.buyer_id}>`,
+    content: [
+      `<@${req.buyer_id}>`,
+      '',
+      `**Your code (valid ${VALIDITY_MINUTES} min):**`,
+      codeBlock,
+      '',
+      '↑ Copy the code above and use it in the game or at **drm.steam.run**',
+    ].join('\n'),
     embeds: [embed],
     components: [copyRow],
   });

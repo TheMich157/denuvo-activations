@@ -150,3 +150,12 @@ export function getUnverifiedPendingOlderThan(maxAgeMinutes) {
       AND datetime(created_at) < datetime('now', '-' || ? || ' minutes')
   `).all(maxAgeMinutes);
 }
+
+/** All open requests (pending or in_progress) that have a ticket channel. */
+export function getOpenTicketRequests() {
+  return db.prepare(`
+    SELECT id, buyer_id, issuer_id, game_app_id, game_name, ticket_channel_id, status
+    FROM requests
+    WHERE status IN ('pending', 'in_progress') AND ticket_channel_id IS NOT NULL AND ticket_channel_id != ''
+  `).all();
+}

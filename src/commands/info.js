@@ -250,6 +250,7 @@ export async function execute(interaction) {
           '`/preorder create/close/fulfill/refill` — Manage preorders',
           '`/waitlist list/remove` — Manage waitlist',
           '`/blacklist` — Manage blacklisted users',
+          '`/closealltickets` — Close all open ticket channels',
           '`/away` — Toggle away status',
         ].join('\n'),
         inline: false,

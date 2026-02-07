@@ -168,6 +168,16 @@ async function handleAutoCodeModal(interaction) {
   }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const ticketChannel = req.ticket_channel_id
+    ? await interaction.client.channels.fetch(req.ticket_channel_id).catch(() => null)
+    : null;
+  if (ticketChannel?.send) {
+    await ticketChannel.send({
+      content: `⏳ **Generating your code...** (this may take a moment). You'll get the code here as soon as it's ready.`,
+    }).catch(() => {});
+  }
+
   try {
     const code = await generateAuthCode(req.game_app_id, credentials, twoFactorCode);
     const result = await completeAndNotifyTicket(req, code, interaction.client);

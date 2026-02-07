@@ -135,7 +135,8 @@ const schema = `
     ticket_channel_id TEXT,
     points_charged INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
-    completed_at TEXT
+    completed_at TEXT,
+    updated_at TEXT
   );
   CREATE TABLE IF NOT EXISTS point_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,9 +175,23 @@ export async function initDb() {
   try {
     sqlDb.exec('ALTER TABLE requests ADD COLUMN screenshot_verified INTEGER DEFAULT 0');
   } catch {}
+  // Add updated_at if missing (existing DBs created before this column)
   try {
-    sqlDb.exec(`ALTER TABLE requests ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))`);
-  } catch {}
+    const stmt = sqlDb.prepare('PRAGMA table_info(requests)');
+    let hasUpdatedAt = false;
+    while (stmt.step()) {
+      if (stmt.getAsObject().name === 'updated_at') {
+        hasUpdatedAt = true;
+        break;
+      }
+    }
+    stmt.free();
+    if (!hasUpdatedAt) {
+      sqlDb.exec('ALTER TABLE requests ADD COLUMN updated_at TEXT');
+    }
+  } catch (e) {
+    log('Migration updated_at failed:', e?.message);
+  }
   try {
     sqlDb.exec(`
       CREATE TABLE IF NOT EXISTS activation_cooldowns (

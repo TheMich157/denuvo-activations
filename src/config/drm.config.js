@@ -1,8 +1,4 @@
-/**
- * DRM (drm.steam.run) automation config.
- * Env: DRM_BASE_URL, DRM_TIMEOUT_MS, DRM_HEADLESS, DRM_CODE_OUTPUT_TIMEOUT_MS,
- *      DRM_SELECTOR_* for each selector (see below).
- */
+
 const baseUrl = (process.env.DRM_BASE_URL || 'https://drm.steam.run').replace(/\/+$/, '');
 const timeoutMs = Math.max(10000, Math.min(120000, parseInt(process.env.DRM_TIMEOUT_MS || '60000', 10) || 60000));
 const codeOutputTimeoutMs = Math.max(5000, Math.min(30000, parseInt(process.env.DRM_CODE_OUTPUT_TIMEOUT_MS || '15000', 10) || 15000));

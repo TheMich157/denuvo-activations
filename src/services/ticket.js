@@ -116,6 +116,7 @@ import {
     const overwrites = [
       { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
       { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+      { id: interaction.client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
     ];
     if (config.activatorRoleId) {
       overwrites.push({
@@ -123,7 +124,7 @@ import {
         allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
       });
     }
-  
+
     let ticketChannel = null;
     if (config.ticketCategoryId) {
       ticketChannel = await interaction.guild.channels.create({
@@ -242,11 +243,15 @@ import {
     if (queuePosition > 1) extraLines.push(`📊 **Queue position:** #${queuePosition}`);
 
     if (ticketChannel) {
-      await ticketChannel.send(msg);
-      if (extraLines.length > 0) {
-        await ticketChannel.send({ content: extraLines.join('\n') }).catch(() => {});
+      try {
+        await ticketChannel.send(msg);
+        if (extraLines.length > 0) {
+          await ticketChannel.send({ content: extraLines.join('\n') }).catch(() => {});
+        }
+      } catch (err) {
+        console.error('[Ticket] Failed to send message to ticket channel:', err?.message || err);
+        return { ok: false, error: `Channel was created but the bot couldn't post in it. Check that the bot has **View Channel** and **Send Messages** in the ticket category. (${err?.message || 'Unknown error'})` };
       }
-      // DM activators who have this game (not away)
       notifyActivators(interaction.client, {
         gameName: getGameDisplayName(game),
         gameAppId: game.appId,

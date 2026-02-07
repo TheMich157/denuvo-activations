@@ -18,6 +18,7 @@ import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { config } from '../config.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
+import { testLogin } from '../services/drm.js';
 
 export const data = new SlashCommandBuilder()
   .setName('add')
@@ -147,6 +148,16 @@ export async function handleModal(interaction) {
   const username = interaction.fields.getTextInputValue('username');
   const password = interaction.fields.getTextInputValue('password');
 
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const testResult = await testLogin({ username, password });
+  if (!testResult.ok) {
+    await interaction.editReply({
+      content: `❌ **Login test failed** — credentials were not saved.\n\n${testResult.error}\n\nCheck your Steam username and password, then try \`/add\` again.`,
+    });
+    return true;
+  }
+
   const initialStock = 5;
   addActivatorGame(interaction.user.id, appId, game.name, 'automated', { username, password }, initialStock);
   logRestock({
@@ -157,9 +168,12 @@ export async function handleModal(interaction) {
     method: 'manual',
   }).catch(() => {});
   const count = getStockCount(appId);
-  await interaction.reply({
-    content: `Added **${game.name}** with automated activation. **${count}** in stock. Credentials stored encrypted. Stock deducts only when you press Done and enter the code.`,
-    flags: MessageFlags.Ephemeral,
+
+  const twoFANote = testResult.requires2FA
+    ? ' When generating a code, you\'ll be asked for your current Steam Guard 2FA code.'
+    : '';
+  await interaction.editReply({
+    content: `✅ **Login test passed.** Added **${game.name}** with automated activation. **${count}** in stock. Credentials stored encrypted.${twoFANote}`,
   });
   syncPanelMessage(interaction.client, buildPanelMessagePayload()).catch(() => {});
   notifyWaitlistAndClear(interaction.client, appId).catch(() => {});
