@@ -159,6 +159,103 @@ export async function logStaleTicketClosed({ requestId, buyerId, issuerId, gameN
   await sendToLogChannel(embed);
 }
 
+/* ──────────────── Preorder Logging ──────────────── */
+
+/**
+ * Log a preorder creation.
+ */
+export async function logPreorderCreated({ preorderId, gameName, price, maxSpots, createdBy, threadId }) {
+  const spotsText = maxSpots > 0 ? `${maxSpots} spots` : 'Unlimited spots';
+  const embed = new EmbedBuilder()
+    .setColor(0xe91e63)
+    .setTitle('🛒 Preorder created')
+    .setDescription(`A new preorder has been created.`)
+    .addFields(
+      { name: 'Preorder', value: `#${preorderId}`, inline: true },
+      { name: 'Game', value: gameName, inline: true },
+      { name: 'Price', value: `$${price.toFixed(2)}`, inline: true },
+      { name: 'Spots', value: spotsText, inline: true },
+      { name: 'Created by', value: `<@${createdBy}>`, inline: true },
+      { name: 'Forum post', value: threadId ? `<#${threadId}>` : '—', inline: true },
+    )
+    .setTimestamp();
+  await sendToLogChannel(embed);
+}
+
+/**
+ * Log a preorder spot claim.
+ */
+export async function logPreorderClaim({ preorderId, gameName, userId, spotsInfo }) {
+  const spotsText = spotsInfo?.unlimited
+    ? `${spotsInfo.claimed} claimed`
+    : `${spotsInfo.verified}/${spotsInfo.total} verified • ${spotsInfo.remaining} remaining`;
+  const embed = new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle('🎟️ Preorder spot claimed')
+    .addFields(
+      { name: 'Preorder', value: `#${preorderId} — ${gameName}`, inline: true },
+      { name: 'User', value: `<@${userId}>`, inline: true },
+      { name: 'Spots', value: spotsText, inline: true },
+    )
+    .setTimestamp();
+  await sendToLogChannel(embed);
+}
+
+/**
+ * Log a tip verification (auto or manual).
+ */
+export async function logPreorderVerify({ preorderId, gameName, userId, amount, method, verifiedBy }) {
+  const embed = new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle('✅ Tip verified')
+    .addFields(
+      { name: 'Preorder', value: `#${preorderId} — ${gameName}`, inline: true },
+      { name: 'User', value: `<@${userId}>`, inline: true },
+      { name: 'Amount', value: amount ? `$${amount.toFixed(2)}` : '—', inline: true },
+      { name: 'Method', value: method === 'auto' ? 'Auto-verified (OCR)' : `Manual — by <@${verifiedBy}>`, inline: false },
+    )
+    .setTimestamp();
+  await sendToLogChannel(embed);
+}
+
+/**
+ * Log a tip rejection.
+ */
+export async function logPreorderReject({ preorderId, gameName, userId, rejectedBy }) {
+  const embed = new EmbedBuilder()
+    .setColor(0xed4245)
+    .setTitle('❌ Tip rejected')
+    .addFields(
+      { name: 'Preorder', value: `#${preorderId} — ${gameName}`, inline: true },
+      { name: 'User', value: `<@${userId}>`, inline: true },
+      { name: 'Rejected by', value: `<@${rejectedBy}>`, inline: true },
+    )
+    .setTimestamp();
+  await sendToLogChannel(embed);
+}
+
+/**
+ * Log a preorder status change (close, fulfill, refill).
+ */
+export async function logPreorderStatus({ preorderId, gameName, action, actor, spotsInfo }) {
+  const colors = { closed: 0xe67e22, fulfilled: 0x57f287, refilled: 0x9b59b6 };
+  const titles = { closed: '🔒 Preorder closed', fulfilled: '🎉 Preorder fulfilled', refilled: '🔄 Preorder refilled' };
+  const spotsText = spotsInfo
+    ? (spotsInfo.unlimited ? `${spotsInfo.verified} verified` : `${spotsInfo.verified}/${spotsInfo.total} verified`)
+    : '—';
+  const embed = new EmbedBuilder()
+    .setColor(colors[action] ?? 0x5865f2)
+    .setTitle(titles[action] ?? `Preorder ${action}`)
+    .addFields(
+      { name: 'Preorder', value: `#${preorderId} — ${gameName}`, inline: true },
+      { name: 'Action', value: action, inline: true },
+      { name: 'By', value: `<@${actor}>`, inline: true },
+      { name: 'Spots', value: spotsText, inline: true },
+    )
+    .setTimestamp();
+  await sendToLogChannel(embed);
+}
+
 /**
  * Log a batch of automatic restocks (one embed per run).
  * @param {{ activatorId: string; gameAppId: number; gameName: string }[]} entries

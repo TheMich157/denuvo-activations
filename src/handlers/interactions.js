@@ -26,8 +26,14 @@ import { handleButton as invalidHandleButton } from '../commands/invalid.js';
 import { handleButton as callModHandleButton } from '../commands/call_mod.js';
 import { handleButton as transferHandleButton } from '../commands/transfer.js';
 import { sendStatusDM } from '../services/statusNotify.js';
-import { getPreorder, submitClaim, getClaim, verifyClaim } from '../services/preorder.js';
+import { getPreorder, submitClaim, getClaim, verifyClaim, getPreorderSpots, isPreorderFull, closePreorder } from '../services/preorder.js';
 import { config } from '../config.js';
+import {
+  logPreorderClaim,
+  logPreorderVerify,
+  logPreorderReject,
+  logPreorderStatus,
+} from '../services/activationLog.js';
 
 function buildIssuerActionRow(requestId, hasAutomated = false) {
   const components = [
@@ -265,10 +271,16 @@ async function handleTipVerifyButton(interaction) {
 
   if (isVerify) {
     verifyClaim(preorderId, userId);
+    const spots = getPreorderSpots(preorderId);
+    const spotsText = spots?.unlimited
+      ? `${spots.verified} verified`
+      : `${spots.verified}/${spots.total} verified • **${spots.remaining}** remaining`;
+
     const embed = new EmbedBuilder()
       .setColor(0x57f287)
       .setTitle('✅ Tip Verified')
       .setDescription(`<@${userId}>'s tip for preorder **#${preorderId}** (${preorder.game_name}) has been manually verified by <@${interaction.user.id}>.`)
+      .addFields({ name: '🎟️ Spots', value: spotsText, inline: true })
       .setTimestamp();
     await interaction.update({ embeds: [embed], components: [] });
 
@@ -280,13 +292,25 @@ async function handleTipVerifyButton(interaction) {
           embeds: [
             new EmbedBuilder()
               .setColor(0x57f287)
-              .setTitle('✅ Your Tip Was Verified!')
-              .setDescription(`Your tip for preorder **#${preorderId}** (${preorder.game_name}) has been verified. You'll be notified when the preorder is fulfilled!`)
+              .setTitle('✅ Spot Claimed & Verified!')
+              .setDescription(
+                [
+                  `Your donation for preorder **#${preorderId}** (${preorder.game_name}) has been **verified**!`,
+                  '',
+                  '**Your spot is confirmed.** You\'ll receive a DM when the preorder is fulfilled and your activation is ready.',
+                  '',
+                  `🎟️ ${spotsText}`,
+                ].join('\n')
+              )
+              .setFooter({ text: `Preorder #${preorderId}` })
               .setTimestamp(),
           ],
         }).catch(() => {});
       }
     } catch {}
+
+    // Log
+    logPreorderVerify({ preorderId, gameName: preorder.game_name, userId, amount: null, method: 'manual', verifiedBy: interaction.user.id }).catch(() => {});
 
     // Notify thread
     if (preorder.thread_id) {
@@ -297,12 +321,34 @@ async function handleTipVerifyButton(interaction) {
             embeds: [
               new EmbedBuilder()
                 .setColor(0x57f287)
-                .setDescription(`✅ <@${userId}>'s tip has been manually verified by <@${interaction.user.id}>.`)
+                .setDescription(`✅ <@${userId}>'s tip manually verified by <@${interaction.user.id}>.\n🎟️ ${spotsText}`)
                 .setTimestamp(),
             ],
           });
         }
       } catch {}
+    }
+
+    // Auto-close if all spots filled
+    if (isPreorderFull(preorderId)) {
+      closePreorder(preorderId);
+      logPreorderStatus({ preorderId, gameName: preorder.game_name, action: 'closed', actor: interaction.client.user.id, spotsInfo: spots }).catch(() => {});
+      if (preorder.thread_id) {
+        try {
+          const thread = await interaction.client.channels.fetch(preorder.thread_id).catch(() => null);
+          if (thread) {
+            await thread.send({
+              embeds: [
+                new EmbedBuilder()
+                  .setColor(0xe67e22)
+                  .setTitle('🔒 Preorder Full — Auto-Closed')
+                  .setDescription(`All **${spots.total}** spots have been filled! This preorder is now closed.`)
+                  .setTimestamp(),
+              ],
+            });
+          }
+        } catch {}
+      }
     }
   } else {
     // Reject
@@ -312,6 +358,9 @@ async function handleTipVerifyButton(interaction) {
       .setDescription(`<@${userId}>'s tip proof for preorder **#${preorderId}** was rejected by <@${interaction.user.id}>.\n\nPlease re-submit a valid Ko-fi receipt screenshot.`)
       .setTimestamp();
     await interaction.update({ embeds: [embed], components: [] });
+
+    // Log
+    logPreorderReject({ preorderId, gameName: preorder.game_name, userId, rejectedBy: interaction.user.id }).catch(() => {});
 
     // DM the user
     try {
@@ -345,6 +394,12 @@ async function handlePreorderClaim(interaction) {
     return true;
   }
 
+  // Check if spots are full
+  if (isPreorderFull(preorderId)) {
+    await interaction.reply({ content: `All spots for preorder **#${preorderId}** (${preorder.game_name}) are filled. Check back later or look for a refill!`, flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
   const existing = getClaim(preorderId, interaction.user.id);
   if (existing) {
     const status = existing.verified ? '✅ **Verified**' : '⏳ **Pending verification**';
@@ -356,6 +411,13 @@ async function handlePreorderClaim(interaction) {
   }
 
   submitClaim(preorderId, interaction.user.id);
+  const spots = getPreorderSpots(preorderId);
+  const spotsText = spots?.unlimited
+    ? `${spots.claimed} claimed so far`
+    : `${spots.claimed}/${spots.total} spots claimed • **${spots.remaining}** remaining`;
+
+  // Log the claim
+  logPreorderClaim({ preorderId, gameName: preorder.game_name, userId: interaction.user.id, spotsInfo: spots }).catch(() => {});
 
   const embed = new EmbedBuilder()
     .setColor(0xe91e63)
@@ -363,6 +425,8 @@ async function handlePreorderClaim(interaction) {
     .setDescription(
       [
         `You've claimed a spot for **${preorder.game_name}** (Preorder #${preorderId}).`,
+        '',
+        `🎟️ **Spots:** ${spotsText}`,
         '',
         '**Next steps:**',
         `1. Donate at least **$${preorder.price.toFixed(2)}** on [Ko-fi](${config.kofiUrl})`,
@@ -375,6 +439,49 @@ async function handlePreorderClaim(interaction) {
     .setTimestamp();
 
   await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+
+  // DM the user a confirmation
+  try {
+    await interaction.user.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xe91e63)
+          .setTitle('🎟️ Preorder Spot Reserved!')
+          .setDescription(
+            [
+              `You claimed a spot for **${preorder.game_name}** (Preorder #${preorderId}).`,
+              '',
+              `💰 **Donate at least $${preorder.price.toFixed(2)}** on [Ko-fi](${config.kofiUrl})`,
+              config.tipVerifyChannelId
+                ? `📸 **Post your receipt** in <#${config.tipVerifyChannelId}> with \`#${preorderId}\``
+                : `📸 **Post your receipt** in the tip verification channel with \`#${preorderId}\``,
+              '',
+              `🎟️ ${spotsText}`,
+            ].join('\n')
+          )
+          .setFooter({ text: `Preorder #${preorderId} • Verify within 48 hours` })
+          .setTimestamp(),
+      ],
+    }).catch(() => {});
+  } catch {}
+
+  // Notify the forum thread
+  if (preorder.thread_id) {
+    try {
+      const thread = await interaction.client.channels.fetch(preorder.thread_id).catch(() => null);
+      if (thread) {
+        await thread.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x3498db)
+              .setDescription(`🎟️ <@${interaction.user.id}> claimed a spot! ${spotsText}`)
+              .setTimestamp(),
+          ],
+        });
+      }
+    } catch {}
+  }
+
   return true;
 }
 

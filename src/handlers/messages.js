@@ -22,8 +22,14 @@ import {
   submitClaim,
   verifyClaim,
   getOpenPreorders,
+  getPreorderSpots,
+  isPreorderFull,
+  closePreorder,
 } from '../services/preorder.js';
-import { isActivator } from '../utils/activator.js';
+import {
+  logPreorderVerify,
+  logPreorderStatus,
+} from '../services/activationLog.js';
 
 const IMAGE_EXT = /\.(png|jpg|jpeg|webp|gif)(\?.*)?$/i;
 const FAIL_THRESHOLD = 5;
@@ -209,6 +215,11 @@ async function handleTipVerification(message) {
     verifyClaim(preorderId, message.author.id);
     await message.react('✅').catch(() => {});
 
+    const spots = getPreorderSpots(preorderId);
+    const spotsText = spots?.unlimited
+      ? `${spots.verified} verified`
+      : `${spots.verified}/${spots.total} verified • **${spots.remaining}** remaining`;
+
     const embed = new EmbedBuilder()
       .setColor(0x57f287)
       .setTitle('✅ Tip Verified!')
@@ -216,12 +227,39 @@ async function handleTipVerification(message) {
         [
           `Payment of **$${amount.toFixed(2)}** detected for preorder **#${preorderId}** (${preorder.game_name}).`,
           '',
-          'Your spot is **confirmed**! You\'ll be notified when the preorder is fulfilled.',
+          '**Your spot is confirmed!** You\'ll be notified when the preorder is fulfilled.',
+          '',
+          `🎟️ ${spotsText}`,
         ].join('\n')
       )
       .setFooter({ text: `Auto-verified • Preorder #${preorderId}` })
       .setTimestamp();
     await message.reply({ embeds: [embed] });
+
+    // Log
+    logPreorderVerify({ preorderId, gameName: preorder.game_name, userId: message.author.id, amount, method: 'auto', verifiedBy: null }).catch(() => {});
+
+    // DM the user
+    try {
+      await message.author.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x57f287)
+            .setTitle('✅ Spot Claimed & Verified!')
+            .setDescription(
+              [
+                `Your **$${amount.toFixed(2)}** donation for preorder **#${preorderId}** (${preorder.game_name}) has been **auto-verified**!`,
+                '',
+                '**Your spot is confirmed.** You\'ll receive a DM when the preorder is fulfilled and your activation is ready.',
+                '',
+                `🎟️ ${spotsText}`,
+              ].join('\n')
+            )
+            .setFooter({ text: `Preorder #${preorderId}` })
+            .setTimestamp(),
+        ],
+      }).catch(() => {});
+    } catch {}
 
     // Notify the preorder thread
     if (preorder.thread_id) {
@@ -232,12 +270,34 @@ async function handleTipVerification(message) {
             embeds: [
               new EmbedBuilder()
                 .setColor(0x57f287)
-                .setDescription(`✅ <@${message.author.id}> verified a **$${amount.toFixed(2)}** tip for this preorder.`)
+                .setDescription(`✅ <@${message.author.id}> verified a **$${amount.toFixed(2)}** tip.\n🎟️ ${spotsText}`)
                 .setTimestamp(),
             ],
           });
         }
       } catch {}
+    }
+
+    // Auto-close if all spots filled
+    if (isPreorderFull(preorderId)) {
+      closePreorder(preorderId);
+      logPreorderStatus({ preorderId, gameName: preorder.game_name, action: 'closed', actor: message.client.user.id, spotsInfo: spots }).catch(() => {});
+      if (preorder.thread_id) {
+        try {
+          const thread = await message.client.channels.fetch(preorder.thread_id).catch(() => null);
+          if (thread) {
+            await thread.send({
+              embeds: [
+                new EmbedBuilder()
+                  .setColor(0xe67e22)
+                  .setTitle('🔒 Preorder Full — Auto-Closed')
+                  .setDescription(`All **${spots.total}** spots have been filled! This preorder is now closed.`)
+                  .setTimestamp(),
+              ],
+            });
+          }
+        } catch {}
+      }
     }
   } else {
     // Needs manual review — detected partial info or failed OCR

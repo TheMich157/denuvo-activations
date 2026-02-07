@@ -4,11 +4,11 @@ import { isValidDiscordId } from '../utils/validate.js';
 /**
  * Create a new preorder.
  */
-export function createPreorder(gameName, gameAppId, description, price, createdBy, threadId = null) {
+export function createPreorder(gameName, gameAppId, description, price, createdBy, maxSpots = 0, threadId = null) {
   db.prepare(`
-    INSERT INTO preorders (game_name, game_app_id, description, price, created_by, thread_id)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(gameName, gameAppId || null, description || null, price, createdBy, threadId);
+    INSERT INTO preorders (game_name, game_app_id, description, price, max_spots, created_by, thread_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(gameName, gameAppId || null, description || null, price, maxSpots, createdBy, threadId);
   scheduleSave();
   const row = db.prepare('SELECT last_insert_rowid() AS id').get();
   return row?.id;
@@ -44,10 +44,19 @@ export function getOpenPreorders() {
 }
 
 /**
- * Close a preorder.
+ * Close a preorder (set status to closed).
  */
 export function closePreorder(preorderId) {
   db.prepare(`UPDATE preorders SET status = 'closed' WHERE id = ?`).run(preorderId);
+  scheduleSave();
+}
+
+/**
+ * Fully delete a preorder and all its claims from the DB.
+ */
+export function deletePreorder(preorderId) {
+  db.prepare('DELETE FROM preorder_claims WHERE preorder_id = ?').run(preorderId);
+  db.prepare('DELETE FROM preorders WHERE id = ?').run(preorderId);
   scheduleSave();
 }
 
@@ -56,6 +65,18 @@ export function closePreorder(preorderId) {
  */
 export function fulfillPreorder(preorderId) {
   db.prepare(`UPDATE preorders SET status = 'fulfilled' WHERE id = ?`).run(preorderId);
+  scheduleSave();
+}
+
+/**
+ * Refill / reopen a preorder (reset to open, optionally update max_spots).
+ */
+export function refillPreorder(preorderId, newMaxSpots = null) {
+  if (newMaxSpots !== null) {
+    db.prepare(`UPDATE preorders SET status = 'open', max_spots = ? WHERE id = ?`).run(newMaxSpots, preorderId);
+  } else {
+    db.prepare(`UPDATE preorders SET status = 'open' WHERE id = ?`).run(preorderId);
+  }
   scheduleSave();
 }
 
@@ -126,4 +147,33 @@ export function getPendingClaims() {
     WHERE pc.verified = 0 AND pc.proof_message_id IS NOT NULL
     ORDER BY pc.created_at ASC
   `).all();
+}
+
+/**
+ * Get spots info for a preorder.
+ * @returns {{ total: number; claimed: number; verified: number; remaining: number; unlimited: boolean }}
+ */
+export function getPreorderSpots(preorderId) {
+  const preorder = getPreorder(preorderId);
+  if (!preorder) return null;
+  const claims = getClaimsForPreorder(preorderId);
+  const verified = claims.filter((c) => c.verified === 1).length;
+  const maxSpots = preorder.max_spots || 0;
+  const unlimited = maxSpots === 0;
+  return {
+    total: maxSpots,
+    claimed: claims.length,
+    verified,
+    remaining: unlimited ? Infinity : Math.max(0, maxSpots - verified),
+    unlimited,
+  };
+}
+
+/**
+ * Check if a preorder is full (all spots verified). Returns true if full.
+ */
+export function isPreorderFull(preorderId) {
+  const spots = getPreorderSpots(preorderId);
+  if (!spots || spots.unlimited) return false;
+  return spots.verified >= spots.total;
 }

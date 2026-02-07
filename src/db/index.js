@@ -280,12 +280,17 @@ export async function initDb() {
         game_app_id INTEGER,
         description TEXT,
         price REAL DEFAULT 5.0,
+        max_spots INTEGER DEFAULT 0,
         created_by TEXT NOT NULL,
         thread_id TEXT,
         status TEXT DEFAULT 'open' CHECK(status IN ('open', 'closed', 'fulfilled')),
         created_at TEXT DEFAULT (datetime('now'))
       )
     `);
+  } catch {}
+  // Migration: add max_spots column if missing
+  try {
+    sqlDb.exec(`ALTER TABLE preorders ADD COLUMN max_spots INTEGER DEFAULT 0`);
   } catch {}
   // Preorder claims (users who paid/donated)
   try {
