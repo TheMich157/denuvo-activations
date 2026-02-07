@@ -251,6 +251,7 @@ export async function execute(interaction) {
           '`/waitlist list/remove` — Manage waitlist',
           '`/blacklist` — Manage blacklisted users',
           '`/closealltickets` — Close all open ticket channels',
+          '`/refreshtickets` — Refresh panel and re-post missing ticket messages if stuck',
           '`/away` — Toggle away status',
         ].join('\n'),
         inline: false,

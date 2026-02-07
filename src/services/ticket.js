@@ -174,7 +174,7 @@ import {
           `**Auto-assigned to:** <@${best.activator_id}>`,
           '',
           hasAutomated
-            ? '**Automatic:** Use **Get code automatically** (enter 2FA when asked). **Manual:** Use **Done** to paste the code. Press **Help** if needed.'
+            ? '**Automatic:** Use **Get code automatically** (enter the confirmation code from your email when asked). **Manual:** Use **Done** to paste the code. Press **Help** if needed.'
             : 'Use **Done** to enter the auth code from drm.steam.run. Press **Help** if needed.',
         ].join('\n')
       )
@@ -262,4 +262,96 @@ import {
     }
     return { ok: true, message: msg, queuePosition, usedSkipToken };
   }
-  
+
+/**
+ * Build embed + components to re-post in a ticket channel when the original message is missing (recovery).
+ * @param {Object} req - Request row (id, buyer_id, issuer_id, game_name, game_app_id, status)
+ * @returns {{ embeds: EmbedBuilder[]; components: ActionRowBuilder[] }}
+ */
+export function buildTicketRecoveryPayload(req) {
+  const requestId = req.id;
+  const ticketRef = `#${requestId.slice(0, 8).toUpperCase()}`;
+  const game = getGameByAppId(req.game_app_id);
+  const gameName = game ? getGameDisplayName(game) : req.game_name;
+  const cooldownH = getCooldownHours(req.game_app_id);
+
+  const claimRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`claim_request:${requestId}`)
+      .setLabel('I\'ll handle this')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId('close_ticket')
+      .setLabel('Close ticket')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  if (req.status === 'in_progress' && req.issuer_id) {
+    const hasAutomated = !!getCredentials(req.issuer_id, req.game_app_id);
+    const actionComponents = [
+      new ButtonBuilder().setCustomId('done_request').setLabel('Done – enter auth code').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('call_activator').setLabel('Help').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('close_ticket').setLabel('Close ticket').setStyle(ButtonStyle.Secondary),
+    ];
+    if (hasAutomated) {
+      actionComponents.unshift(
+        new ButtonBuilder().setCustomId(`auto_code:${requestId}`).setLabel('Get code automatically').setStyle(ButtonStyle.Primary).setEmoji('⚡')
+      );
+    }
+    const embed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle(`🎮 Activation Request: ${gameName}`)
+      .setDescription(
+        [
+          `**Requester:** <@${req.buyer_id}>`,
+          `**Assigned to:** <@${req.issuer_id}>`,
+          '',
+          'Use **Done** to enter the auth code, or **Get code automatically** if available. Press **Help** if needed.',
+        ].join('\n')
+      )
+      .addFields(
+        { name: '📋 Status', value: 'In progress — awaiting screenshot/code', inline: true },
+        {
+          name: '📸 Screenshot',
+          value: `Game folder Properties + WUB (red shield). Ticket closes if not verified in 5 min (${cooldownH}h cooldown).`,
+          inline: false,
+        }
+      )
+      .setFooter({ text: `Ticket ${ticketRef} • Refreshed` })
+      .setTimestamp();
+    return {
+      embeds: [embed],
+      components: [new ActionRowBuilder().addComponents(actionComponents)],
+    };
+  }
+
+  const activators = getActivatorsForGame(req.game_app_id);
+  const availableActivators = activators.filter((a) => !isAway(a.activator_id));
+  const activatorMentions = (availableActivators.length > 0 ? availableActivators : activators)
+    .map((a) => `<@${a.activator_id}>`).join(' ') || '—';
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(`🎮 Activation Request: ${gameName}`)
+    .setDescription(
+      [
+        `**Requester:** <@${req.buyer_id}>`,
+        '',
+        `${activatorMentions}`,
+        'First activator to press the button claims this request.',
+      ].join('\n')
+    )
+    .addFields(
+      { name: '📋 Status', value: 'Waiting for screenshot', inline: true },
+      {
+        name: '📸 Required',
+        value: `Post screenshot (game folder Properties + WUB). Ticket closes if not verified in 5 min (${cooldownH}h cooldown).`,
+        inline: false,
+      }
+    )
+    .setFooter({ text: `Ticket ${ticketRef} • Refreshed` })
+    .setTimestamp();
+  return {
+    embeds: [embed],
+    components: [claimRow],
+  };
+}

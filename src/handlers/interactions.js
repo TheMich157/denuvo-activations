@@ -98,7 +98,7 @@ async function handleClaimRequest(interaction) {
         `**Assigned activator:** <@${req.issuer_id}>`,
         '',
         hasAutomated
-          ? '**Automatic:** Use **Get code automatically** (enter 2FA when asked). **Manual:** Use **Done** to paste the code from drm.steam.run yourself. Press **Help** if you need assistance.'
+          ? '**Automatic:** Use **Get code automatically** (enter the confirmation code from your email when asked). **Manual:** Use **Done** to paste the code from drm.steam.run yourself. Press **Help** if you need assistance.'
           : 'Use **Done** to enter the auth code from drm.steam.run (manual method). Press **Help** if you need assistance.',
       ].join('\n')
     )
@@ -129,17 +129,78 @@ async function handleAutoCodeButton(interaction) {
     await interaction.reply({ content: 'Automated credentials not found for this game. Use **Done** to enter the code manually.', flags: MessageFlags.Ephemeral });
     return true;
   }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const ticketChannel = req.ticket_channel_id
+    ? await interaction.client.channels.fetch(req.ticket_channel_id).catch(() => null)
+    : null;
+  if (ticketChannel?.send) {
+    await ticketChannel.send({
+      content: `⏳ **Generating your code...** (trying saved session first). You'll get the code here as soon as it's ready.`,
+    }).catch(() => {});
+  }
+
+  try {
+    const code = await generateAuthCode(req.game_app_id, credentials, null);
+    const result = await completeAndNotifyTicket(req, code, interaction.client);
+    if (result === 'screenshot_not_verified') {
+      await interaction.editReply({
+        content: '❌ **Cannot complete** — the buyer\'s screenshot has not been verified yet. Verify it first, then try again.',
+      });
+      return true;
+    }
+    await interaction.editReply({
+      content: `✅ **Code generated and sent to the ticket.** **${req.points_charged}** points transferred to you.`,
+    });
+  } catch (err) {
+    const msg = err?.message || 'Generation failed.';
+    const needsConfirmationCode = msg.includes('Confirmation code') || msg.includes('Steam Guard') || msg.includes('2FA');
+    if (needsConfirmationCode) {
+      await interaction.editReply({
+        content: '📧 **Steam sent a confirmation code to your email.** Enter the 5-digit code below.',
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`auto_code_2fa:${requestId}`)
+              .setLabel('Enter confirmation code')
+              .setStyle(ButtonStyle.Primary)
+          ),
+        ],
+      });
+    } else {
+      await interaction.editReply({
+        content: `❌ **Could not generate code.** ${msg} You can use **Done** to paste the code from drm.steam.run manually.`,
+      });
+    }
+  }
+  return true;
+}
+
+async function handleAutoCode2FAButton(interaction) {
+  if (!interaction.isButton() || !interaction.customId.startsWith('auto_code_2fa:')) return false;
+  const requestId = interaction.customId.slice('auto_code_2fa:'.length);
+  const req = getRequest(requestId);
+  if (!req || req.issuer_id !== interaction.user.id) {
+    await interaction.reply({ content: 'Invalid or unauthorized.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  const credentials = getCredentials(req.issuer_id, req.game_app_id);
+  if (!credentials) {
+    await interaction.reply({ content: 'Automated credentials not available. Use **Done** and enter the code manually.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
   const modal = new ModalBuilder()
     .setCustomId(`auto_code_modal:${requestId}`)
-    .setTitle('Steam Guard code');
+    .setTitle('Confirmation code');
   modal.addComponents(
     new ActionRowBuilder().addComponents(
       new TextInputBuilder()
         .setCustomId('twofactor')
-        .setLabel('Current 2FA code')
+        .setLabel('Confirmation code (from email)')
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
-        .setPlaceholder('6-digit code from Steam Guard / Authenticator')
+        .setPlaceholder('5-digit code Steam sent to your email')
         .setMinLength(5)
         .setMaxLength(8)
     )
@@ -704,6 +765,7 @@ export async function handle(interaction) {
     handleCloseTicket,
     handleClaimRequest,
     handleAutoCodeButton,
+    handleAutoCode2FAButton,
     handleAutoCodeModal,
     handlePreorderClaim,
     handleTipVerifyButton,

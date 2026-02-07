@@ -19,6 +19,42 @@ const log = debug('drm');
 const MIN_CODE_LENGTH = 10;
 const CODE_FALLBACK_REGEX = /[A-Za-z0-9_-]{20,}/;
 
+/** Chromium must not get args that specify a page to open (e.g. URLs). Playwright disallows that. */
+const SAFE_BROWSER_ARGS = [
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--disable-software-rasterizer',
+  '--disable-dev-tools',
+  '--no-first-run',
+  '--no-zygote',
+  '--single-process',
+  '--disable-extensions',
+  '--disable-background-networking',
+  '--disable-default-apps',
+  '--disable-sync',
+  '--metrics-recording-only',
+  '--mute-audio',
+  '--hide-scrollbars',
+  '--disable-features=site-per-process',
+];
+const URL_LIKE = /^(https?:\/\/|\.\w{2,}\/|\w+\.(com|org|net|run|io))/i;
+const FLAG_ARG = /^--?[a-zA-Z0-9-]+(=[^ ]*)?$/;
+
+function getSafeLaunchArgs() {
+  const base = [...SAFE_BROWSER_ARGS.slice(0, 4)];
+  if (!drmConfig.browserArgs?.length) return base;
+  for (const arg of drmConfig.browserArgs) {
+    const s = String(arg).trim();
+    if (!s) continue;
+    if (URL_LIKE.test(s)) continue;
+    if (s.includes('http') || s.includes('.com') || s.includes('.run')) continue;
+    if (FLAG_ARG.test(s)) base.push(s);
+  }
+  return base;
+}
+
 /** Safe filename for session storage (one file per Steam username). */
 function getSessionPath(username) {
   const safe = createHash('sha256').update(String(username).trim().toLowerCase()).digest('hex').slice(0, 32);
@@ -70,7 +106,7 @@ function validateCredentialsOnly(credentials) {
 
 /**
  * Test Steam login via drm.steam.run: navigate, click login, submit credentials.
- * Stops at success (back on drm.steam.run) or at 2FA prompt (credentials accepted).
+ * Stops at success (back on drm.steam.run) or at confirmation-code prompt (credentials accepted).
  * @param {{ username: string; password: string }} credentials
  * @returns {Promise<{ ok: boolean; requires2FA?: boolean; error?: string }>}
  */
@@ -93,11 +129,8 @@ export async function testLogin(credentials) {
   const { chromium } = await import('playwright');
   const launchOptions = {
     headless: drmConfig.headless !== false,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    args: getSafeLaunchArgs(),
   };
-  if (drmConfig.browserArgs?.length) {
-    launchOptions.args.push(...drmConfig.browserArgs);
-  }
 
   const browser = await chromium.launch(launchOptions);
   const closeBrowser = () => {
@@ -138,7 +171,7 @@ export async function testLogin(credentials) {
 
     if (twoFactorVisible) {
       closeBrowser();
-      log('Test login: credentials accepted, 2FA required for full login');
+      log('Test login: credentials accepted, confirmation code (email) required for full login');
       return { ok: true, requires2FA: true };
     }
 
@@ -200,7 +233,7 @@ async function extractCodeFromPage(page) {
  * Reuses saved session when available so login is skipped when already logged in.
  * @param {number} gameAppId - Steam app ID
  * @param {{ username: string; password: string }} credentials - Steam login
- * @param {string | null} twoFactorCode - Current 2FA code (Steam Guard), only needed when session expired or first login
+ * @param {string | null} twoFactorCode - Confirmation code from Steam email (5 digits), only needed when session expired or first login
  * @returns {Promise<string>} - Authorization code
  */
 export async function generateAuthCode(gameAppId, credentials, twoFactorCode = null) {
@@ -220,11 +253,8 @@ export async function generateAuthCode(gameAppId, credentials, twoFactorCode = n
   const { chromium } = await import('playwright');
   const launchOptions = {
     headless: drmConfig.headless !== false,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    args: getSafeLaunchArgs(),
   };
-  if (drmConfig.browserArgs?.length) {
-    launchOptions.args.push(...drmConfig.browserArgs);
-  }
 
   const browser = await chromium.launch(launchOptions);
 
@@ -278,7 +308,7 @@ export async function generateAuthCode(gameAppId, credentials, twoFactorCode = n
         await page.locator(drmConfig.selectors.steamSubmit).first().click();
         await page.waitForLoadState('networkidle');
       } else if (twoFactorVisible && !twoFactorCode) {
-        throw new Error('Steam Guard 2FA required. Provide the current authenticator or email code.');
+        throw new Error('Confirmation code required. Check your email and enter the 5-digit code Steam sent.');
       }
 
       const baseHost = new URL(drmConfig.baseUrl).hostname;
@@ -326,9 +356,9 @@ export async function generateAuthCode(gameAppId, credentials, twoFactorCode = n
     return code;
   } catch (err) {
     const msg = err?.message || 'Unknown error';
-    if (msg.includes('Steam Guard') || msg.includes('2FA')) throw err;
+    if (msg.includes('Confirmation code') || msg.includes('Steam Guard') || msg.includes('2FA')) throw err;
     if (msg.includes('timeout') || msg.includes('Timeout')) {
-      throw new Error('drm.steam.run timed out. Check credentials and 2FA, then try again.');
+      throw new Error('drm.steam.run timed out. Check credentials and the confirmation code from your email, then try again.');
     }
     if (msg.includes('Could not extract')) throw err;
     throw new Error(`drm.steam.run automation failed. ${msg}`);

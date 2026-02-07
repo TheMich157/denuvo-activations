@@ -170,7 +170,7 @@ export async function handleModal(interaction) {
   const count = getStockCount(appId);
 
   const twoFANote = testResult.requires2FA
-    ? ' When generating a code, you\'ll be asked for your current Steam Guard 2FA code.'
+    ? ' When generating a code, you\'ll be asked for the 5-digit confirmation code Steam sends to your email.'
     : '';
   await interaction.editReply({
     content: `✅ **Login test passed.** Added **${game.name}** with automated activation. **${count}** in stock. Credentials stored encrypted.${twoFANote}`,
