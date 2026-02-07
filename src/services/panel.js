@@ -78,16 +78,17 @@ export function scheduleAutoReopen(client, guildId, durationMs, buildPayload) {
   reopenTimer = setTimeout(async () => {
     reopenTimer = null;
     try {
-      await deleteClosedMessage(client);
+      // Remember channel before deleting closed info
       const closed = getClosedInfo();
       const channelId = closed?.channelId;
-      clearClosedInfo();
+      await deleteClosedMessage(client);
       if (!channelId) return;
       const channel = await client.channels.fetch(channelId).catch(() => null);
       if (!channel?.isTextBased?.()) return;
       const payload = buildPayload();
       const msg = await channel.send(payload);
       setPanel(guildId, channel.id, msg.id);
+      log('Panel auto-reopened after maintenance timer');
     } catch (err) {
       log('autoReopenPanel failed:', err?.message);
     }

@@ -14,13 +14,14 @@ import { isActivator } from '../utils/activator.js';
 
 const log = debug('interaction');
 import { assignIssuer, getRequest, getRequestByChannel, cancelRequest, markScreenshotVerified } from '../services/requests.js';
+import { saveTranscript } from '../services/transcript.js';
 import { getCredentials } from '../services/activators.js';
 import { setState, clearState } from '../services/screenshotVerify/state.js';
 import { generateAuthCode } from '../services/drm.js';
 import { completeAndNotifyTicket } from '../commands/done.js';
 import { handleSelect as panelHandleSelect, handleRefresh as panelHandleRefresh } from '../commands/panelHandler.js';
 import { handleSelect as addHandleSelect, handleModal as addHandleModal } from '../commands/add.js';
-import { handleButton as doneHandleButton, handleModal as doneHandleModal, handleCopyButton as doneHandleCopyButton, handleCodeWorkedButton } from '../commands/done.js';
+import { handleButton as doneHandleButton, handleModal as doneHandleModal, handleCopyButton as doneHandleCopyButton, handleCodeWorkedButton, handleRateButton } from '../commands/done.js';
 import { handleButton as invalidHandleButton } from '../commands/invalid.js';
 import { handleButton as callModHandleButton } from '../commands/call_mod.js';
 import { handleButton as transferHandleButton } from '../commands/transfer.js';
@@ -217,6 +218,8 @@ async function handleCloseTicket(interaction) {
     await interaction.reply({ content: 'Only the buyer or assigned activator can close this ticket.', flags: MessageFlags.Ephemeral });
     return true;
   }
+  // Save transcript before closing
+  await saveTranscript(interaction.client, interaction.channelId, req.id).catch(() => {});
   cancelRequest(req.id);
   clearState(interaction.channelId);
   const channel = interaction.channel;
@@ -239,6 +242,7 @@ export async function handle(interaction) {
     handleAutoCodeModal,
     doneHandleCopyButton,
     handleCodeWorkedButton,
+    handleRateButton,
     panelHandleSelect,
     panelHandleRefresh,
     addHandleSelect,

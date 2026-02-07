@@ -12,6 +12,8 @@ import { completeRequest, getRequest, getPendingRequestForChannel } from '../ser
 import { logActivation } from '../services/activationLog.js';
 import { sendCooldownDM } from '../services/cooldownDM.js';
 import { getCooldownHours, getGameByAppId, getGameDisplayName } from '../utils/games.js';
+import { recordStreakActivity, getStreakInfo, getStreakBonus } from '../services/streaks.js';
+import { addPoints } from '../services/points.js';
 
 const VALIDITY_MINUTES = 30;
 
@@ -35,6 +37,16 @@ export async function completeAndNotifyTicket(req, authCode, client) {
   const gameName = game ? getGameDisplayName(game) : req.game_name;
   if (client) {
     sendCooldownDM(client, req.buyer_id, { gameName, cooldownUntil, hours }).catch(() => {});
+  }
+
+  // Streak tracking & bonus
+  if (req.issuer_id) {
+    recordStreakActivity(req.issuer_id);
+    const streak = getStreakInfo(req.issuer_id);
+    const bonus = getStreakBonus(streak.current);
+    if (bonus > 0) {
+      addPoints(req.issuer_id, bonus, 'streak_bonus', req.id);
+    }
   }
 
   const ticketChannel = req.ticket_channel_id
@@ -182,6 +194,48 @@ export async function handleCodeWorkedButton(interaction) {
     .setColor(0x57f287)
     .setTitle('✅ Code confirmed')
     .setDescription(`<@${req.buyer_id}> confirmed the authorization code worked for **${req.game_name}**.`)
+    .addFields({ name: '📋 Status', value: 'Completed ✓', inline: true })
+    .setFooter({ text: `Ticket #${requestId.slice(0, 8).toUpperCase()}` })
+    .setTimestamp();
+  // Rating buttons
+  const ratingRow = new ActionRowBuilder().addComponents(
+    ...[1, 2, 3, 4, 5].map((n) =>
+      new ButtonBuilder()
+        .setCustomId(`rate_activator:${requestId}:${n}`)
+        .setLabel('★'.repeat(n))
+        .setStyle(n >= 4 ? ButtonStyle.Success : n >= 2 ? ButtonStyle.Primary : ButtonStyle.Secondary)
+    )
+  );
+  const closeRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('close_ticket').setLabel('Close ticket').setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [ratingRow, closeRow] });
+  return true;
+}
+
+export async function handleRateButton(interaction) {
+  if (!interaction.isButton() || !interaction.customId.startsWith('rate_activator:')) return false;
+  const parts = interaction.customId.split(':');
+  const requestId = parts[1];
+  const rating = parseInt(parts[2], 10);
+  const req = getRequest(requestId);
+  if (!req) return false;
+  if (interaction.user.id !== req.buyer_id) {
+    await interaction.reply({ content: 'Only the buyer can rate.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  const { submitRating, hasRated } = await import('../services/ratings.js');
+  if (hasRated(requestId)) {
+    await interaction.reply({ content: 'You already rated this activation.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  submitRating(requestId, req.issuer_id, req.buyer_id, rating);
+  const embed = new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle('✅ Code confirmed & rated')
+    .setDescription(
+      `<@${req.buyer_id}> confirmed the code worked for **${req.game_name}** and rated <@${req.issuer_id}> ${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}.`
+    )
     .addFields({ name: '📋 Status', value: 'Completed ✓', inline: true })
     .setFooter({ text: `Ticket #${requestId.slice(0, 8).toUpperCase()}` })
     .setTimestamp();

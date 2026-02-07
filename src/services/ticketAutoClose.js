@@ -2,20 +2,27 @@ import { getUnverifiedPendingOlderThan } from './requests.js';
 import { cancelRequest, setCooldown } from './requests.js';
 import { clearState } from './screenshotVerify/state.js';
 import { ticketConfig } from '../config/ticket.js';
-import { logTicketAutoClosed } from './activationLog.js';
+import { logTicketAutoClosed, logStaleTicketClosed } from './activationLog.js';
 import { debug } from '../utils/debug.js';
 import { getCooldownHours } from '../utils/games.js';
+import { db } from '../db/index.js';
+import { saveTranscript } from './transcript.js';
 
 const log = debug('ticketAutoClose');
 
 let clientRef = null;
 let intervalId = null;
 
+const STALE_TICKET_MINUTES = 120; // 2 hours idle for in_progress tickets
+
 export function startTicketAutoClose(client) {
   clientRef = client;
   if (intervalId) clearInterval(intervalId);
   const { checkIntervalMs, verifyDeadlineMinutes } = ticketConfig;
-  intervalId = setInterval(runCheck, checkIntervalMs);
+  intervalId = setInterval(() => {
+    runCheck(verifyDeadlineMinutes).catch((err) => log('Check failed:', err?.message));
+    runStaleCheck().catch((err) => log('Stale check failed:', err?.message));
+  }, checkIntervalMs);
   runCheck(verifyDeadlineMinutes).catch((err) => {
     log('First run check failed:', err?.message);
   });
@@ -33,6 +40,12 @@ async function runCheck(deadlineMinutes = ticketConfig.verifyDeadlineMinutes) {
   if (!clientRef) return;
   const toClose = getUnverifiedPendingOlderThan(deadlineMinutes);
   for (const req of toClose) {
+    // Save transcript before closing
+    if (req.ticket_channel_id) {
+      await saveTranscript(clientRef, req.ticket_channel_id, req.id).catch((err) =>
+        log('Transcript save failed:', err?.message)
+      );
+    }
     cancelRequest(req.id);
     setCooldown(req.buyer_id, req.game_app_id);
     clearState(req.ticket_channel_id);
@@ -66,6 +79,74 @@ async function runCheck(deadlineMinutes = ticketConfig.verifyDeadlineMinutes) {
       buyerId: req.buyer_id,
       gameName: req.game_name,
       gameAppId: req.game_app_id,
+    });
+  }
+}
+
+/**
+ * Close stale in_progress tickets (no activity for STALE_TICKET_MINUTES).
+ */
+async function runStaleCheck() {
+  if (!clientRef) return;
+  const stale = db.prepare(`
+    SELECT id, buyer_id, issuer_id, game_app_id, game_name, ticket_channel_id
+    FROM requests
+    WHERE status = 'in_progress'
+      AND datetime(created_at) < datetime('now', '-' || ? || ' minutes')
+  `).all(STALE_TICKET_MINUTES);
+
+  for (const req of stale) {
+    // Check if channel has recent messages before closing
+    let hasRecentActivity = false;
+    if (req.ticket_channel_id) {
+      try {
+        const channel = await clientRef.channels.fetch(req.ticket_channel_id).catch(() => null);
+        if (channel?.messages) {
+          const recent = await channel.messages.fetch({ limit: 1 });
+          const lastMsg = recent.first();
+          if (lastMsg) {
+            const msgAge = Date.now() - lastMsg.createdTimestamp;
+            if (msgAge < STALE_TICKET_MINUTES * 60 * 1000) {
+              hasRecentActivity = true;
+            }
+          }
+        }
+      } catch {
+        // ignore fetch errors
+      }
+    }
+    if (hasRecentActivity) continue;
+
+    // Save transcript before closing
+    if (req.ticket_channel_id) {
+      await saveTranscript(clientRef, req.ticket_channel_id, req.id).catch((err) =>
+        log('Transcript save failed:', err?.message)
+      );
+    }
+
+    cancelRequest(req.id);
+    clearState(req.ticket_channel_id);
+    const msg = `⏱️ This ticket was automatically closed due to **${STALE_TICKET_MINUTES} minutes** of inactivity. If you need help, please create a new request.`;
+    const channel = await clientRef.channels.fetch(req.ticket_channel_id).catch(() => null);
+    if (channel?.send) {
+      await channel.send({ content: msg }).catch((err) =>
+        log('Send stale close msg failed:', err?.message)
+      );
+    }
+    if (channel?.deletable) {
+      // Wait a few seconds so the user can see the message
+      await new Promise((r) => setTimeout(r, 5000));
+      await channel.delete().catch((err) =>
+        log('Delete stale channel failed:', err?.message)
+      );
+    }
+    await logStaleTicketClosed({
+      requestId: req.id,
+      buyerId: req.buyer_id,
+      issuerId: req.issuer_id,
+      gameName: req.game_name,
+      gameAppId: req.game_app_id,
+      idleMinutes: STALE_TICKET_MINUTES,
     });
   }
 }

@@ -10,6 +10,7 @@ import { canUseCommand } from './src/utils/whitelist.js';
 import { startTicketAutoClose } from './src/services/ticketAutoClose.js';
 import { setClient as setActivationLogClient } from './src/services/activationLog.js';
 import { startStockRestock } from './src/services/stockRestock.js';
+import { startDailyDigest } from './src/services/dailyDigest.js';
 import { syncPanelMessage } from './src/services/panel.js';
 import { buildPanelMessagePayload } from './src/commands/ticketpanel.js';
 import { MessageFlags } from 'discord.js';
@@ -56,6 +57,7 @@ client.once(Events.ClientReady, async (c) => {
   startTicketAutoClose(client);
   setActivationLogClient(client);
   startStockRestock(client);
+  startDailyDigest(client);
   syncPanelMessage(client, buildPanelMessagePayload()).catch((err) =>
     console.error('[Panel] Startup sync failed:', err?.message)
   );

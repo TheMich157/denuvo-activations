@@ -113,7 +113,7 @@ export async function execute(interaction) {
   clearPanel();
   setClosedInfo({ channelId, messageId: closedMsgId, reopenAt });
 
-  // Schedule auto-reopen
+  // Schedule auto-reopen (delete maintenance msg + post fresh panel)
   if (reopenAt && durationMs) {
     scheduleAutoReopen(interaction.client, interaction.guildId, durationMs, buildPanelMessagePayload);
   }

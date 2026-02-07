@@ -3,6 +3,7 @@ export const ACTIVATOR_COMMANDS = [
   'remove',
   'stock',
   'removestock',
+  'bulkstock',
   'addpoints',
   'ticketpanel',
   'closepanel',

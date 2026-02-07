@@ -141,6 +141,25 @@ export async function logRestock({ activatorId, gameAppId, gameName, quantity, m
 }
 
 /**
+ * Log a stale in_progress ticket auto-closed due to inactivity.
+ */
+export async function logStaleTicketClosed({ requestId, buyerId, issuerId, gameName, gameAppId, idleMinutes }) {
+  const embed = new EmbedBuilder()
+    .setColor(0xe67e22)
+    .setTitle('💤 Stale ticket auto-closed')
+    .setDescription(`Ticket closed: no activity for **${idleMinutes}** minutes.`)
+    .addFields(
+      { name: 'Request ID', value: `\`${requestId}\``, inline: true },
+      { name: 'Game', value: `${gameName} (\`${gameAppId}\`)`, inline: true },
+      { name: 'Buyer', value: `<@${buyerId}>`, inline: true },
+      { name: 'Activator', value: issuerId ? `<@${issuerId}>` : '—', inline: true }
+    )
+    .setFooter({ text: `Ticket #${(requestId || '').slice(0, 8).toUpperCase()}` })
+    .setTimestamp();
+  await sendToLogChannel(embed);
+}
+
+/**
  * Log a batch of automatic restocks (one embed per run).
  * @param {{ activatorId: string; gameAppId: number; gameName: string }[]} entries
  */

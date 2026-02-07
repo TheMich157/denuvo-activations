@@ -1,4 +1,17 @@
 import { EmbedBuilder } from 'discord.js';
+import { db } from '../db/index.js';
+
+/**
+ * Check if a user has DM notifications enabled.
+ */
+function hasDMEnabled(userId) {
+  try {
+    const row = db.prepare('SELECT dm_notifications FROM users WHERE id = ?').get(userId);
+    return (row?.dm_notifications ?? 1) === 1;
+  } catch {
+    return true; // default on
+  }
+}
 
 /**
  * Send a DM to the user about their cooldown (e.g. after a request is completed or when blocked).
@@ -9,6 +22,7 @@ import { EmbedBuilder } from 'discord.js';
  */
 export async function sendCooldownDM(client, userId, { gameName, cooldownUntil, hours }) {
   try {
+    if (!hasDMEnabled(userId)) return false;
     const user = await client.users.fetch(userId).catch(() => null);
     if (!user) return false;
     const untilSec = Math.floor(cooldownUntil / 1000);

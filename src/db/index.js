@@ -226,6 +226,37 @@ export async function initDb() {
       )
     `);
   } catch {}
+  // Activator ratings
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS activator_ratings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id TEXT NOT NULL,
+        activator_id TEXT NOT NULL,
+        buyer_id TEXT NOT NULL,
+        rating INTEGER NOT NULL CHECK(rating >= 1 AND rating <= 5),
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(request_id)
+      )
+    `);
+    sqlDb.exec('CREATE INDEX IF NOT EXISTS idx_ratings_activator ON activator_ratings(activator_id)');
+  } catch {}
+  // User notification settings
+  try {
+    sqlDb.exec('ALTER TABLE users ADD COLUMN dm_notifications INTEGER DEFAULT 1');
+  } catch {}
+  // Streaks
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS activator_streaks (
+        activator_id TEXT PRIMARY KEY,
+        current_streak INTEGER DEFAULT 0,
+        longest_streak INTEGER DEFAULT 0,
+        last_active_date TEXT,
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+  } catch {}
   return db;
 }
 

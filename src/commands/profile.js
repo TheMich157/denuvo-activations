@@ -9,6 +9,8 @@ import { requireGuild } from '../utils/guild.js';
 import { formatPointsAsMoney } from '../utils/pointsFormat.js';
 import { getGameDisplayName, getGameByAppId, getCooldownHours } from '../utils/games.js';
 import { isAway } from '../services/activatorStatus.js';
+import { getActivatorRating, formatStars } from '../services/ratings.js';
+import { getStreakInfo } from '../services/streaks.js';
 import { config } from '../config.js';
 
 const HISTORY_LIMIT = 5;
@@ -90,6 +92,24 @@ export async function execute(interaction) {
     value: `**${statCount}**`,
     inline: true,
   });
+
+  // —— Rating (activators only) ——
+  if (activator) {
+    const { average, count } = getActivatorRating(userId);
+    const ratingText = average != null
+      ? `${formatStars(average)} **${average}**/5 (${count} rating${count !== 1 ? 's' : ''})`
+      : 'No ratings yet';
+    embed.addFields({ name: '⭐ Rating', value: ratingText, inline: true });
+  }
+
+  // —— Streak (activators only) ——
+  if (activator) {
+    const streak = getStreakInfo(userId);
+    const streakText = streak.current > 0
+      ? `🔥 **${streak.current}** day${streak.current !== 1 ? 's' : ''} (best: ${streak.longest})`
+      : `Best: **${streak.longest}** day${streak.longest !== 1 ? 's' : ''}`;
+    embed.addFields({ name: '📆 Streak', value: streakText, inline: true });
+  }
 
   // —— Cooldowns ——
   if (cooldowns.length > 0) {
