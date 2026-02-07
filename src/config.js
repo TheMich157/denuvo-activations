@@ -10,6 +10,9 @@ export const config = {
   dailyActivationLimit: parseInt(process.env.DAILY_ACTIVATION_LIMIT ?? '5', 10),
   pointsPerActivation: parseInt(process.env.POINTS_PER_ACTIVATION ?? '50', 10),
   restockHours: parseInt(process.env.RESTOCK_HOURS ?? '24', 10) || 24,
+  reviewChannelId: process.env.REVIEW_CHANNEL_ID || null,
+  manifestChannelId: process.env.MANIFEST_CHANNEL_ID || null,
+  ryuuApiKey: process.env.RYUU_API_KEY || null,
 };
 
 const REQUIRED = ['token', 'clientId', 'activatorRoleId', 'ticketCategoryId'];

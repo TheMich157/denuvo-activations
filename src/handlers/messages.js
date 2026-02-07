@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  AttachmentBuilder,
 } from 'discord.js';
 import { getRequestByChannel, markScreenshotVerified } from '../services/requests.js';
 import { verifyScreenshot } from '../services/screenshotVerify/index.js';
@@ -11,9 +12,15 @@ import {
   recordFailure,
   clearState,
 } from '../services/screenshotVerify/state.js';
+import { config } from '../config.js';
+import { fetchManifest } from '../services/manifest.js';
+import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
+import { getGameByAppId, getGameDisplayName } from '../utils/games.js';
 
 const IMAGE_EXT = /\.(png|jpg|jpeg|webp|gif)(\?.*)?$/i;
 const FAIL_THRESHOLD = 5;
+const MANIFEST_RATE_LIMIT = 3;         // max requests
+const MANIFEST_RATE_WINDOW = 60_000;   // per 60 seconds
 
 function buildManualVerifyRow(channelId) {
   return new ActionRowBuilder().addComponents(
@@ -25,8 +32,129 @@ function buildManualVerifyRow(channelId) {
   );
 }
 
+async function handleManifestRequest(message) {
+  if (!config.manifestChannelId || message.channelId !== config.manifestChannelId) return false;
+  if (!config.ryuuApiKey) return false;
+
+  const content = message.content.trim();
+  // Accept plain numbers (Steam app IDs)
+  const appIdMatch = content.match(/^\d+$/);
+  if (!appIdMatch) {
+    const helpEmbed = new EmbedBuilder()
+      .setColor(0xfee75c)
+      .setTitle('📦 Manifest Request')
+      .setDescription(
+        'Send a valid **Steam App ID** (numbers only) to download the game manifest.\n\n' +
+        '**Example:** `500` (Left 4 Dead)\n\n' +
+        'You can find App IDs on [SteamDB](https://steamdb.info/) or the Steam store URL.'
+      )
+      .setTimestamp();
+    await message.reply({ embeds: [helpEmbed] });
+    return true;
+  }
+
+  // Rate limit: prevent spam
+  if (!checkRateLimit(message.author.id, 'manifest', MANIFEST_RATE_LIMIT, MANIFEST_RATE_WINDOW)) {
+    const remaining = getRemainingCooldown(message.author.id, 'manifest');
+    await message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xed4245)
+          .setTitle('⏳ Slow down')
+          .setDescription(`You can request **${MANIFEST_RATE_LIMIT}** manifests per minute. Try again in **${remaining}s**.`)
+          .setTimestamp(),
+      ],
+    });
+    return true;
+  }
+
+  const appId = appIdMatch[0];
+
+  // Resolve game name from list.json if available
+  const knownGame = getGameByAppId(parseInt(appId, 10));
+  const gameName = knownGame ? getGameDisplayName(knownGame) : null;
+  const gameLabel = gameName ? `**${gameName}** (${appId})` : `App ID **${appId}**`;
+
+  // Show loading reaction + pending embed
+  await message.react('📦').catch(() => {});
+
+  const pendingEmbed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle('📦 Fetching Manifest…')
+    .setDescription(`Downloading manifest for ${gameLabel}. Please wait…`)
+    .setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` })
+    .setTimestamp();
+  const pendingMsg = await message.reply({ embeds: [pendingEmbed] });
+
+  try {
+    const result = await fetchManifest(appId);
+
+    // Remove loading reaction, add success
+    await message.reactions.cache.get('📦')?.users?.remove(message.client.user.id).catch(() => {});
+    await message.react('✅').catch(() => {});
+
+    if (result.type === 'file') {
+      const sizeKb = (result.buffer.length / 1024).toFixed(1);
+      const attachment = new AttachmentBuilder(result.buffer, { name: result.filename });
+      const successEmbed = new EmbedBuilder()
+        .setColor(0x57f287)
+        .setTitle('✅ Manifest Ready')
+        .setDescription(`Manifest for ${gameLabel} is ready.`)
+        .addFields(
+          { name: '📁 File', value: result.filename, inline: true },
+          { name: '📏 Size', value: `${sizeKb} KB`, inline: true },
+        )
+        .setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` })
+        .setTimestamp();
+      await pendingMsg.edit({ embeds: [successEmbed], files: [attachment] });
+    } else {
+      // JSON response — format and display
+      const jsonStr = JSON.stringify(result.data, null, 2);
+      if (jsonStr.length <= 1900) {
+        const successEmbed = new EmbedBuilder()
+          .setColor(0x57f287)
+          .setTitle('✅ Manifest Ready')
+          .setDescription(`Manifest data for ${gameLabel}:\n\`\`\`json\n${jsonStr}\n\`\`\``)
+          .setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` })
+          .setTimestamp();
+        await pendingMsg.edit({ embeds: [successEmbed] });
+      } else {
+        const attachment = new AttachmentBuilder(
+          Buffer.from(jsonStr, 'utf-8'),
+          { name: `manifest_${appId}.json` }
+        );
+        const successEmbed = new EmbedBuilder()
+          .setColor(0x57f287)
+          .setTitle('✅ Manifest Ready')
+          .setDescription(`Manifest data for ${gameLabel} (attached as file — too large for embed).`)
+          .setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` })
+          .setTimestamp();
+        await pendingMsg.edit({ embeds: [successEmbed], files: [attachment] });
+      }
+    }
+  } catch (err) {
+    // Remove loading reaction, add failure
+    await message.reactions.cache.get('📦')?.users?.remove(message.client.user.id).catch(() => {});
+    await message.react('❌').catch(() => {});
+
+    const errorEmbed = new EmbedBuilder()
+      .setColor(0xed4245)
+      .setTitle('❌ Manifest Failed')
+      .setDescription(`Could not fetch manifest for ${gameLabel}.`)
+      .addFields({ name: 'Error', value: err.message || 'Unknown error', inline: false })
+      .setFooter({ text: 'Check the App ID and try again' })
+      .setTimestamp();
+    await pendingMsg.edit({ embeds: [errorEmbed] });
+  }
+  return true;
+}
+
 export async function handleMessage(message) {
   if (message.author.bot || !message.guild) return;
+
+  // Handle manifest requests in the designated channel
+  if (await handleManifestRequest(message)) return;
+
   const req = getRequestByChannel(message.channelId);
   if (!req || req.buyer_id !== message.author.id) return;
 

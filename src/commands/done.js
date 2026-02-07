@@ -14,6 +14,8 @@ import { sendCooldownDM } from '../services/cooldownDM.js';
 import { getCooldownHours, getGameByAppId, getGameDisplayName } from '../utils/games.js';
 import { recordStreakActivity, getStreakInfo, getStreakBonus } from '../services/streaks.js';
 import { addPoints } from '../services/points.js';
+import { config } from '../config.js';
+import { isActivator } from '../utils/activator.js';
 
 const VALIDITY_MINUTES = 30;
 
@@ -224,7 +226,15 @@ export async function handleRateButton(interaction) {
     await interaction.reply({ content: 'Only the buyer can rate.', flags: MessageFlags.Ephemeral });
     return true;
   }
-  const { submitRating, hasRated } = await import('../services/ratings.js');
+  // Only allow rating activators (Activator / WL Activator role)
+  if (req.issuer_id && interaction.guild) {
+    const issuerMember = await interaction.guild.members.fetch(req.issuer_id).catch(() => null);
+    if (!issuerMember || !isActivator(issuerMember)) {
+      await interaction.reply({ content: 'You can only rate Activators.', flags: MessageFlags.Ephemeral });
+      return true;
+    }
+  }
+  const { submitRating, hasRated, getActivatorRating, formatStars } = await import('../services/ratings.js');
   if (hasRated(requestId)) {
     await interaction.reply({ content: 'You already rated this activation.', flags: MessageFlags.Ephemeral });
     return true;
@@ -243,5 +253,42 @@ export async function handleRateButton(interaction) {
     new ButtonBuilder().setCustomId('close_ticket').setLabel('Close ticket').setStyle(ButtonStyle.Secondary)
   );
   await interaction.update({ embeds: [embed], components: [closeRow] });
+
+  // Post review to the review channel
+  if (config.reviewChannelId) {
+    try {
+      const reviewChannel = await interaction.client.channels.fetch(config.reviewChannelId);
+      if (reviewChannel) {
+        const { average, count } = getActivatorRating(req.issuer_id);
+        const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
+        const avgStars = average != null ? formatStars(average) : '—';
+
+        // Fetch activator member for thumbnail
+        const activatorMember = await interaction.guild?.members.fetch(req.issuer_id).catch(() => null);
+
+        const reviewEmbed = new EmbedBuilder()
+          .setColor(rating >= 4 ? 0x57f287 : rating >= 2 ? 0xfee75c : 0xed4245)
+          .setAuthor({
+            name: `Review by ${interaction.user.displayName || interaction.user.username}`,
+            iconURL: interaction.user.displayAvatarURL({ size: 64 }),
+          })
+          .setTitle(`${stars}  (${rating}/5)`)
+          .addFields(
+            { name: '🎮 Game', value: req.game_name, inline: true },
+            { name: '🛠️ Activator', value: `<@${req.issuer_id}>`, inline: true },
+            { name: '📊 Overall', value: average != null ? `${avgStars} **${average}**/5 (${count} review${count !== 1 ? 's' : ''})` : 'First review!', inline: true },
+          )
+          .setFooter({ text: `Ticket #${requestId.slice(0, 8).toUpperCase()}` })
+          .setTimestamp();
+
+        if (activatorMember) {
+          reviewEmbed.setThumbnail(activatorMember.user.displayAvatarURL({ size: 128 }));
+        }
+
+        await reviewChannel.send({ embeds: [reviewEmbed] });
+      }
+    } catch {}
+  }
+
   return true;
 }

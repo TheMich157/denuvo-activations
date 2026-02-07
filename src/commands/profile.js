@@ -102,6 +102,17 @@ export async function execute(interaction) {
     embed.addFields({ name: '⭐ Rating', value: ratingText, inline: true });
   }
 
+  // —— Reviews given (non-activators) ——
+  if (!activator) {
+    const reviewsGiven = db.prepare(
+      `SELECT COUNT(*) AS n FROM activator_ratings WHERE buyer_id = ?`
+    ).get(userId);
+    const reviewCount = reviewsGiven?.n ?? 0;
+    if (reviewCount > 0) {
+      embed.addFields({ name: '📝 Reviews Given', value: `**${reviewCount}**`, inline: true });
+    }
+  }
+
   // —— Streak (activators only) ——
   if (activator) {
     const streak = getStreakInfo(userId);
