@@ -48,7 +48,7 @@ async function runCheck(deadlineMinutes = ticketConfig.verifyDeadlineMinutes) {
   for (const req of toClose) {
     // Save transcript before closing
     if (req.ticket_channel_id) {
-      await saveTranscript(clientRef, req.ticket_channel_id, req.id).catch((err) =>
+      await saveTranscript(clientRef, req.ticket_channel_id, req.id, 'auto_closed_unverified').catch((err) =>
         log('Transcript save failed:', err?.message)
       );
     }
@@ -163,7 +163,7 @@ async function runStaleCheck() {
 
     // Save transcript before closing
     if (req.ticket_channel_id) {
-      await saveTranscript(clientRef, req.ticket_channel_id, req.id).catch((err) =>
+      await saveTranscript(clientRef, req.ticket_channel_id, req.id, 'auto_closed_stale').catch((err) =>
         log('Transcript save failed:', err?.message)
       );
     }

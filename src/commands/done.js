@@ -18,6 +18,7 @@ import { config } from '../config.js';
 import { isActivator } from '../utils/activator.js';
 import { triggerPanelSync } from '../services/panel.js';
 import { sendStatusDM } from '../services/statusNotify.js';
+import { saveTranscript } from '../services/transcript.js';
 
 const VALIDITY_MINUTES = 30;
 
@@ -52,6 +53,11 @@ export async function completeAndNotifyTicket(req, authCode, client) {
     if (bonus > 0) {
       addPoints(req.issuer_id, bonus, 'streak_bonus', req.id);
     }
+  }
+
+  // Save transcript on completion
+  if (req.ticket_channel_id) {
+    saveTranscript(client, req.ticket_channel_id, req.id, 'completed').catch(() => {});
   }
 
   // Sync panel to reflect stock change + DM buyer

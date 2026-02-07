@@ -14,7 +14,8 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub.setName('balance')
-      .setDescription('Check your skip token balance')
+      .setDescription('Check skip token balance')
+      .addUserOption((o) => o.setName('user').setDescription('User to check (leave empty for yourself)').setRequired(false))
   )
   .addSubcommand((sub) =>
     sub.setName('give')
@@ -51,17 +52,20 @@ export async function execute(interaction) {
   }
 
   if (sub === 'balance') {
-    const tokens = getTokens(interaction.user.id);
-    const points = getBalance(interaction.user.id);
+    const target = interaction.options.getUser('user') || interaction.user;
+    const isSelf = target.id === interaction.user.id;
+    const tokens = getTokens(target.id);
+    const points = getBalance(target.id);
+    const label = isSelf ? 'Your' : `${target.displayName}'s`;
     const embed = new EmbedBuilder()
       .setColor(0x3498db)
-      .setTitle('⚡ Skip Tokens')
+      .setTitle(`⚡ ${isSelf ? 'Skip Tokens' : `Skip Tokens — ${target.displayName}`}`)
       .addFields(
-        { name: 'Your Tokens', value: `**${tokens}**`, inline: true },
-        { name: 'Your Points', value: `**${points}**`, inline: true },
+        { name: `${label} Tokens`, value: `**${tokens}**`, inline: true },
+        { name: `${label} Points`, value: `**${points}**`, inline: true },
         { name: 'Token Cost', value: `**${SKIP_TOKEN_COST}** points`, inline: true },
       )
-      .setFooter({ text: 'Use /skiptoken buy to purchase • Tokens auto-apply when you have a cooldown' })
+      .setFooter({ text: isSelf ? 'Use /skiptoken buy to purchase • Tokens auto-apply when you have a cooldown' : `Viewing ${target.tag || target.username}'s balance` })
       .setTimestamp();
     return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
@@ -75,6 +79,29 @@ export async function execute(interaction) {
     if (amount < 1 || amount > 100) return interaction.reply({ content: 'Amount must be 1–100.', flags: MessageFlags.Ephemeral });
     addTokens(user.id, amount);
     const total = getTokens(user.id);
+
+    // DM the recipient
+    try {
+      await user.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x57f287)
+            .setTitle('⚡ You Received Skip Tokens!')
+            .setDescription([
+              `You've been given **${amount}** skip token${amount !== 1 ? 's' : ''}!`,
+              '',
+              `⚡ Your token balance: **${total}**`,
+              '',
+              '> Skip tokens automatically bypass cooldowns on your next activation request.',
+            ].join('\n'))
+            .setFooter({ text: 'Use /skiptoken balance to check your tokens' })
+            .setTimestamp(),
+        ],
+      });
+    } catch {
+      // DMs may be disabled — continue silently
+    }
+
     return interaction.reply({
       content: `✅ Gave **${amount}** skip token${amount !== 1 ? 's' : ''} to <@${user.id}>. They now have **${total}**.`,
       flags: MessageFlags.Ephemeral,

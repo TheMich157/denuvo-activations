@@ -285,10 +285,15 @@ export async function initDb() {
         game_name TEXT,
         transcript TEXT NOT NULL,
         message_count INTEGER DEFAULT 0,
+        duration_seconds INTEGER,
+        outcome TEXT,
         created_at TEXT DEFAULT (datetime('now'))
       )
     `);
   } catch {}
+  // Migrate: add new transcript columns if missing
+  try { sqlDb.exec(`ALTER TABLE transcripts ADD COLUMN duration_seconds INTEGER`); } catch {}
+  try { sqlDb.exec(`ALTER TABLE transcripts ADD COLUMN outcome TEXT`); } catch {}
   // Preorders
   try {
     sqlDb.exec(`

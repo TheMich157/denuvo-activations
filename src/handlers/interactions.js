@@ -314,7 +314,7 @@ async function handleCloseTicket(interaction) {
     return true;
   }
   // Save transcript before closing
-  await saveTranscript(interaction.client, interaction.channelId, req.id).catch(() => {});
+  await saveTranscript(interaction.client, interaction.channelId, req.id, 'cancelled').catch(() => {});
   cancelRequest(req.id);
   clearState(interaction.channelId);
   // DM buyer about cancellation

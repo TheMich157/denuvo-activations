@@ -43,7 +43,7 @@ export async function execute(interaction) {
   for (const req of open) {
     try {
       if (req.ticket_channel_id) {
-        await saveTranscript(interaction.client, req.ticket_channel_id, req.id).catch((err) => {
+        await saveTranscript(interaction.client, req.ticket_channel_id, req.id, 'cancelled').catch((err) => {
           errors.push(`Transcript #${req.id.slice(0, 8)}: ${err?.message || err}`);
         });
       }
