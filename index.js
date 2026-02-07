@@ -8,6 +8,7 @@ import { initDb } from './src/db/index.js';
 import { handleMessage } from './src/handlers/messages.js';
 import { canUseCommand } from './src/utils/whitelist.js';
 import { startTicketAutoClose } from './src/services/ticketAutoClose.js';
+import { startStockRestock } from './src/services/stockRestock.js';
 import { syncPanelMessage } from './src/services/panel.js';
 import { buildPanelMessagePayload } from './src/commands/ticketpanel.js';
 import { MessageFlags } from 'discord.js';
@@ -52,6 +53,7 @@ client.once(Events.ClientReady, async (c) => {
     console.error('Failed to register commands:', err);
   }
   startTicketAutoClose(client);
+  startStockRestock(client);
   syncPanelMessage(client, buildPanelMessagePayload()).catch((err) =>
     console.error('[Panel] Startup sync failed:', err?.message)
   );

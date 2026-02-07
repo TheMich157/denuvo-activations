@@ -68,24 +68,46 @@ export async function handleModal(interaction) {
         );
         await mainMsg.edit({ components: [closeRow] });
       }
-    } catch {
-      /* ignore */
-    }
+    } catch {}
+    const VALIDITY_MINUTES = 30;
+    const expiresAt = Math.floor(Date.now() / 1000) + VALIDITY_MINUTES * 60;
     const embed = new EmbedBuilder()
       .setColor(0x57f287)
       .setTitle('✅ Authorization code ready')
-      .setDescription(`Here is your authorization code for **${req.game_name}**.\nSelect the code below and copy it.`)
-      .addFields({
-        name: 'Code',
-        value: `\`\`\`\n${authCode}\n\`\`\``,
-        inline: false,
-      })
-      .setFooter({ text: 'Click the button below to receive the code in a private message' });
+      .setDescription(
+        [
+          `Here is your authorization code for **${req.game_name}**. Select the code below and copy it.`,
+          '',
+          '**If you have a problem with it, press Help** to request assistance.',
+        ].join('\n')
+      )
+      .addFields(
+        {
+          name: 'Code',
+          value: `\`\`\`\n${authCode}\n\`\`\``,
+          inline: false,
+        },
+        {
+          name: '⏱️ Validity',
+          value: `This code is valid for **${VALIDITY_MINUTES} minutes**. Expires <t:${expiresAt}:R> (<t:${expiresAt}:f>).`,
+          inline: false,
+        }
+      )
+      .addFields({ name: '📋 Status', value: 'Code ready', inline: true })
+      .setFooter({ text: `Ticket #${requestId.slice(0, 8).toUpperCase()} • Copy code or press Help if you need assistance` });
     const copyRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`auth_copy:${requestId}`)
         .setLabel('📋 Copy code')
-        .setStyle(ButtonStyle.Primary)
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`auth_worked:${requestId}`)
+        .setLabel('✓ Code worked')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('call_activator')
+        .setLabel('Help')
+        .setStyle(ButtonStyle.Secondary)
     );
     await ticketChannel.send({
       content: `<@${req.buyer_id}>`,
@@ -119,5 +141,28 @@ export async function handleCopyButton(interaction) {
     content: `**Authorization code for ${req.game_name}:**\n\`\`\`\n${req.auth_code}\n\`\`\`\nSelect the text above and copy (Ctrl+C).`,
     flags: MessageFlags.Ephemeral,
   });
+  return true;
+}
+
+export async function handleCodeWorkedButton(interaction) {
+  if (!interaction.isButton() || !interaction.customId.startsWith('auth_worked:')) return false;
+  const requestId = interaction.customId.split(':')[1];
+  const req = getRequest(requestId);
+  if (!req) return false;
+  if (interaction.user.id !== req.buyer_id) {
+    await interaction.reply({ content: 'Only the buyer can confirm the code worked.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  const embed = new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle('✅ Code confirmed')
+    .setDescription(`<@${req.buyer_id}> confirmed the authorization code worked for **${req.game_name}**.`)
+    .addFields({ name: '📋 Status', value: 'Completed ✓', inline: true })
+    .setFooter({ text: `Ticket #${requestId.slice(0, 8).toUpperCase()}` })
+    .setTimestamp();
+  const closeRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('close_ticket').setLabel('Close ticket').setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [closeRow] });
   return true;
 }

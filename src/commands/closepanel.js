@@ -42,9 +42,7 @@ export async function execute(interaction) {
         await msg.delete();
       }
     }
-  } catch {
-    /* ignore */
-  }
+    } catch {}
   clearPanel();
 
   await interaction.reply({ content: '✅ Ticket panel closed.', flags: MessageFlags.Ephemeral });

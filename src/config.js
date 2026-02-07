@@ -9,6 +9,7 @@ export const config = {
   guildId: process.env.GUILD_ID || null,
   dailyActivationLimit: parseInt(process.env.DAILY_ACTIVATION_LIMIT ?? '5', 10),
   pointsPerActivation: parseInt(process.env.POINTS_PER_ACTIVATION ?? '50', 10),
+  restockHours: parseInt(process.env.RESTOCK_HOURS ?? '24', 10) || 24,
 };
 
 const REQUIRED = ['token', 'clientId', 'activatorRoleId', 'ticketCategoryId'];

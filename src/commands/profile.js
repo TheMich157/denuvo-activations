@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
 import { getBalance } from '../services/points.js';
-import { getActivatorGames, getDailyCount } from '../services/activators.js';
+import { getActivatorGames, getDailyCount, getPendingRestockCount } from '../services/activators.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { formatPointsAsMoney } from '../utils/pointsFormat.js';
@@ -41,7 +41,10 @@ export async function execute(interaction) {
       const today = getDailyCount(steamId);
       const remaining = Math.max(0, limit - today);
       const methodLabel = g.method === 'automated' ? '🤖 automated' : '👤 manual';
-      return `• **${g.game_name}** — ${methodLabel} (${remaining}/${limit} today)`;
+      const stock = g.stock_quantity ?? 5;
+      const pending = getPendingRestockCount(userId, g.game_app_id);
+      const restockSuffix = pending > 0 ? ` • +${pending} restocking` : '';
+      return `• **${g.game_name}** — ${methodLabel} stock: ${stock}${restockSuffix} (${remaining}/${limit} today)`;
     });
     embed.addFields({
       name: '🎮 Your Games',

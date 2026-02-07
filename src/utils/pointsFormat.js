@@ -1,6 +1,3 @@
-/**
- * Points ↔ money conversion. 1 point = 1 cent.
- */
 const CENTS_PER_POINT = 1;
 
 export function pointsToDollars(points) {

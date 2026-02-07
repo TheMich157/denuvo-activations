@@ -1,7 +1,3 @@
-/**
- * Simple in-memory rate limiter per user per action.
- */
-
 const windows = new Map();
 const CLEANUP_INTERVAL = 60000;
 

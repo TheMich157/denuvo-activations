@@ -14,7 +14,7 @@ import { assignIssuer, getRequest, getRequestByChannel, cancelRequest, markScree
 import { setState, clearState } from '../services/screenshotVerify/state.js';
 import { handleSelect as panelHandleSelect, handleRefresh as panelHandleRefresh } from '../commands/panelHandler.js';
 import { handleSelect as addHandleSelect, handleModal as addHandleModal } from '../commands/add.js';
-import { handleButton as doneHandleButton, handleModal as doneHandleModal, handleCopyButton as doneHandleCopyButton } from '../commands/done.js';
+import { handleButton as doneHandleButton, handleModal as doneHandleModal, handleCopyButton as doneHandleCopyButton, handleCodeWorkedButton } from '../commands/done.js';
 import { handleButton as invalidHandleButton } from '../commands/invalid.js';
 import { handleButton as callModHandleButton } from '../commands/call_mod.js';
 
@@ -25,12 +25,8 @@ function buildIssuerActionRow() {
       .setLabel('Done – enter auth code')
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
-      .setCustomId('invalid_token')
-      .setLabel('Invalid token')
-      .setStyle(ButtonStyle.Danger),
-    new ButtonBuilder()
       .setCustomId('call_activator')
-      .setLabel('Call activator')
+      .setLabel('Help')
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId('close_ticket')
@@ -56,6 +52,7 @@ async function handleClaimRequest(interaction) {
       { id: req.issuer_id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
     ]);
   }
+  const ticketRef = `#${req.id.slice(0, 8).toUpperCase()}`;
   const claimedEmbed = new EmbedBuilder()
     .setColor(0x57f287)
     .setTitle(`✅ Claimed: ${req.game_name}`)
@@ -64,10 +61,11 @@ async function handleClaimRequest(interaction) {
         `**Requester:** <@${req.buyer_id}>`,
         `**Assigned activator:** <@${req.issuer_id}>`,
         '',
-        'Use **Done** to submit the auth code, or **Invalid token** if the code failed.',
+        'Use **Done** to submit the auth code. Press **Help** if you need assistance.',
       ].join('\n')
     )
-    .setFooter({ text: 'Screenshot must be verified before completing' })
+    .addFields({ name: '📋 Status', value: 'In progress — awaiting auth code', inline: true })
+    .setFooter({ text: `Ticket ${ticketRef} • Screenshot must be verified before completing` })
     .setTimestamp();
 
   await interaction.update({
@@ -101,13 +99,15 @@ async function handleManualVerifyScreenshot(interaction) {
     failCount: 0,
     manualVerified: true,
   });
+  const ticketRef = `#${req.id.slice(0, 8).toUpperCase()}`;
   const approvedEmbed = new EmbedBuilder()
     .setColor(0x57f287)
     .setTitle('✅ Screenshot manually approved')
     .setDescription(
       `Approved by <@${interaction.user.id}>. Ready for activator to claim.`
     )
-    .setFooter({ text: 'Manual verification' })
+    .addFields({ name: '📋 Status', value: 'Verified — ready to claim', inline: true })
+    .setFooter({ text: `Ticket ${ticketRef}` })
     .setTimestamp();
   await interaction.update({
     content: null,
@@ -149,6 +149,7 @@ export async function handle(interaction) {
     handleCloseTicket,
     handleClaimRequest,
     doneHandleCopyButton,
+    handleCodeWorkedButton,
     panelHandleSelect,
     panelHandleRefresh,
     addHandleSelect,

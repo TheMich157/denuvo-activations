@@ -34,8 +34,6 @@ export async function handleMessage(message) {
   if (!attachment) return;
 
   const result = await verifyScreenshot(attachment.url);
-
-  // Merge with any saved partial progress
   const merged = mergeDetection(message.channelId, {
     hasProperties: result.hasProperties,
     hasWub: result.hasWub,
@@ -104,7 +102,6 @@ export async function handleMessage(message) {
     return;
   }
 
-  // Partial: save progress and increment fail count
   const failCount = recordFailure(message.channelId, merged);
   const showManual = failCount >= FAIL_THRESHOLD;
 

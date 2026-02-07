@@ -1,9 +1,3 @@
-/**
- * Screenshot verification service.
- * Tries providers in order: Groq Vision (if key set) → Tesseract OCR.
- * Detects: game folder Properties dialog + WUB (Windows Update Blocker).
- */
-
 import { detect } from './detector.js';
 import { extractText as tesseractExtract } from './providers/tesseract.js';
 import { extractText as groqExtract } from './providers/groq.js';

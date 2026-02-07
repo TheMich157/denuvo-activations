@@ -1,20 +1,5 @@
-/**
- * drm.steam.run integration.
- *
- * Workflow:
- * 1. Navigate to drm.steam.run
- * 2. Click Steam login → Steam OAuth page
- * 3. Enter username/password, handle 2FA (Mobile Authenticator / email code)
- * 4. Redirect back to drm.steam.run (logged in)
- * 5. Extract Authorizations → input game App ID
- * 6. Fill Info → Submit → get authorization code
- */
-
 import { drmConfig } from '../config/drm.config.js';
 
-/**
- * Check if Playwright is available.
- */
 export async function isAutomatedAvailable() {
   try {
     await import('playwright');
@@ -25,12 +10,10 @@ export async function isAutomatedAvailable() {
 }
 
 /**
- * Generate authorization code via drm.steam.run.
- *
- * @param {number} gameAppId - Steam App ID
- * @param {{ username: string, password: string }} credentials - Steam login
- * @param {string} [twoFactorCode] - Steam Guard / Mobile Authenticator code
- * @returns {Promise<string>} The generated authorization code
+ * @param {number} gameAppId
+ * @param {{ username: string; password: string }} credentials
+ * @param {string | null} twoFactorCode
+ * @returns {Promise<string>}
  */
 export async function generateAuthCode(gameAppId, credentials, twoFactorCode = null) {
   const available = await isAutomatedAvailable();

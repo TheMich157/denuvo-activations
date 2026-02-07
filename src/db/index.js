@@ -133,10 +133,10 @@ export async function initDb() {
   sqlDb.exec(schema);
   try {
     sqlDb.exec('ALTER TABLE activator_games ADD COLUMN stock_quantity INTEGER DEFAULT 5');
-  } catch { /* column may already exist */ }
+  } catch {}
   try {
     sqlDb.exec('ALTER TABLE requests ADD COLUMN screenshot_verified INTEGER DEFAULT 0');
-  } catch { /* column may already exist */ }
+  } catch {}
   try {
     sqlDb.exec(`
       CREATE TABLE IF NOT EXISTS activation_cooldowns (
@@ -147,7 +147,19 @@ export async function initDb() {
       )
     `);
     sqlDb.exec('CREATE INDEX IF NOT EXISTS idx_cooldowns_buyer ON activation_cooldowns(buyer_id)');
-  } catch { /* table may already exist */ }
+  } catch {}
+  try {
+    sqlDb.exec(`
+      CREATE TABLE IF NOT EXISTS stock_restock_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        activator_id TEXT NOT NULL,
+        game_app_id INTEGER NOT NULL,
+        restock_at TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+    sqlDb.exec('CREATE INDEX IF NOT EXISTS idx_restock_queue_at ON stock_restock_queue(restock_at)');
+  } catch {}
   return db;
 }
 

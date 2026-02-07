@@ -1,7 +1,3 @@
-/**
- * Input validation for safety.
- */
-
 const DISCORD_ID_REGEX = /^\d{17,19}$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

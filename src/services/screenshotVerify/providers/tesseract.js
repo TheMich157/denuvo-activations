@@ -1,7 +1,3 @@
-/**
- * Tesseract OCR provider. Uses local traineddata from data/ folder.
- */
-
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 

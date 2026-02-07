@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
-import { getActivatorGames, getDailyCount } from '../services/activators.js';
+import { getActivatorGames, getDailyCount, getPendingRestockCount, getNextRestockAt } from '../services/activators.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { config } from '../config.js';
@@ -25,18 +25,30 @@ export async function execute(interaction) {
   }
 
   const limit = config.dailyActivationLimit;
+  const restockHours = config.restockHours || 24;
   const lines = games.map((g) => {
     const steamId = g.steam_username || `manual_${interaction.user.id}_${g.game_app_id}`;
     const today = getDailyCount(steamId);
     const remaining = Math.max(0, limit - today);
-    return `• **${g.game_name}** — ${g.method} (${remaining}/${limit} left today)`;
+    const stock = g.stock_quantity ?? 5;
+    const pending = getPendingRestockCount(interaction.user.id, g.game_app_id);
+    const nextAt = getNextRestockAt(interaction.user.id, g.game_app_id);
+    let restockText = '';
+    if (pending > 0 && nextAt) {
+      const ms = new Date(nextAt).getTime() - Date.now();
+      const hrs = Math.max(0, Math.ceil(ms / (60 * 60 * 1000)));
+      restockText = ` • +${pending} restocking in ~${hrs}h`;
+    }
+    return `• **${g.game_name}** — stock: ${stock}${restockText ? restockText : ''} • ${remaining}/${limit} today`;
   });
 
   const embed = new EmbedBuilder()
     .setColor(0x1b2838)
     .setTitle('📦 Your Stock')
     .setDescription(lines.join('\n'))
-    .setFooter({ text: `${limit} activations per account per day • Use /remove to unregister` })
+    .setFooter({
+      text: `Stock restocks automatically after ${restockHours}h • ${limit} activations/day • Use /remove to unregister`,
+    })
     .setTimestamp();
 
   await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });

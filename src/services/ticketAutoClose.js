@@ -1,8 +1,3 @@
-/**
- * Auto-closes tickets where the screenshot was not verified within 5 minutes.
- * Applies 24h cooldown to the user for that game.
- */
-
 import { getUnverifiedPendingOlderThan } from './requests.js';
 import { cancelRequest, setCooldown } from './requests.js';
 import { clearState } from './screenshotVerify/state.js';
@@ -43,7 +38,7 @@ async function runCheck() {
     try {
       const user = await clientRef.users.fetch(req.buyer_id).catch(() => null);
       if (user) await user.send(msg.replace(`<@${req.buyer_id}> `, '')).catch(() => null);
-    } catch { /* ignore */ }
+    } catch {}
     if (channel?.deletable) {
       await channel.delete().catch(() => null);
     }

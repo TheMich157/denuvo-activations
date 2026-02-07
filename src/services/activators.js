@@ -39,10 +39,18 @@ export function addActivatorStock(activatorId, gameAppId, gameName, quantity) {
 }
 
 export function decrementActivatorStock(activatorId, gameAppId) {
+  const row = db.prepare(
+    'SELECT stock_quantity FROM activator_games WHERE activator_id = ? AND game_app_id = ?'
+  ).get(activatorId, gameAppId);
+  if (!row || (row.stock_quantity ?? 0) <= 0) return;
   db.prepare(`
     UPDATE activator_games SET stock_quantity = max(0, stock_quantity - 1)
-    WHERE activator_id = ? AND game_app_id = ? AND stock_quantity > 0
+    WHERE activator_id = ? AND game_app_id = ?
   `).run(activatorId, gameAppId);
+  const restockAt = new Date(Date.now() + (config.restockHours || 24) * 60 * 60 * 1000).toISOString();
+  db.prepare(
+    'INSERT INTO stock_restock_queue (activator_id, game_app_id, restock_at) VALUES (?, ?, ?)'
+  ).run(activatorId, gameAppId, restockAt);
   scheduleSave();
 }
 
@@ -128,10 +136,6 @@ export function getDailyCount(steamAccountId) {
   return row?.count ?? 0;
 }
 
-/**
- * Returns total available stock for a game (sum of stock_quantity per activator).
- * Deducts when activator completes; add more via /stock.
- */
 export function getAvailableStockForGame(gameAppId) {
   const rows = db.prepare(`
     SELECT activator_id, steam_username, COALESCE(stock_quantity, 5) AS qty
@@ -150,6 +154,44 @@ export function getAvailableStockForGame(gameAppId) {
     total += capacity;
   }
   return total;
+}
+
+export function processRestockQueue() {
+  const rows = db.prepare(
+    `SELECT id, activator_id, game_app_id FROM stock_restock_queue WHERE restock_at <= datetime('now')`
+  ).all();
+  for (const row of rows) {
+    db.prepare(
+      'UPDATE activator_games SET stock_quantity = COALESCE(stock_quantity, 0) + 1 WHERE activator_id = ? AND game_app_id = ?'
+    ).run(row.activator_id, row.game_app_id);
+    db.prepare('DELETE FROM stock_restock_queue WHERE id = ?').run(row.id);
+  }
+  if (rows.length > 0) scheduleSave();
+  return rows.length;
+}
+
+export function cleanupOldRestockEntries() {
+  db.prepare(
+    `DELETE FROM stock_restock_queue WHERE restock_at < datetime('now', '-1 hour')`
+  ).run();
+  db.prepare(
+    `DELETE FROM activation_cooldowns WHERE cooldown_until < datetime('now')`
+  ).run();
+  scheduleSave();
+}
+
+export function getPendingRestockCount(activatorId, gameAppId) {
+  const row = db.prepare(
+    'SELECT COUNT(*) AS n FROM stock_restock_queue WHERE activator_id = ? AND game_app_id = ?'
+  ).get(activatorId, gameAppId);
+  return row?.n ?? 0;
+}
+
+export function getNextRestockAt(activatorId, gameAppId) {
+  const row = db.prepare(
+    'SELECT restock_at FROM stock_restock_queue WHERE activator_id = ? AND game_app_id = ? ORDER BY restock_at ASC LIMIT 1'
+  ).get(activatorId, gameAppId);
+  return row?.restock_at ?? null;
 }
 
 export function getCredentials(activatorId, gameAppId) {

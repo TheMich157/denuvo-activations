@@ -1,8 +1,4 @@
-/**
- * Per-channel screenshot verification state.
- * Persists partial progress and failure count between screenshots.
- * State is in-memory; cleared when ticket is closed/cancelled.
- */
+
 
 /** @type {Map<string, { hasProperties: boolean; hasWub: boolean; failCount: number; manualVerified?: boolean }>} */
 const state = new Map();

@@ -7,7 +7,7 @@ import {
   EmbedBuilder,
   MessageFlags,
 } from 'discord.js';
-import { buildStockSelectMenus, getStockCount, getChunkLabel } from '../services/stock.js';
+import { buildStockSelectMenus, getStockCount, getChunkLabel, getGlobalStockStats, getRestockStats } from '../services/stock.js';
 import { getPanel, setPanel, clearPanel } from '../services/panel.js';
 import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
@@ -32,13 +32,19 @@ export function buildPanelComponents() {
     ];
   }
 
+  const LOW = 10;
   const rows = chunks.map((chunk, i) => {
     const options = chunk.map((g) => {
       const stock = getStockCount(g.appId);
-      const stockSuffix = ` — ${stock} in stock`;
-      const maxNameLen = 82;
-      const label = (g.name.length > maxNameLen ? g.name.slice(0, maxNameLen - 3) + '...' : g.name) + stockSuffix;
-      return { label, value: String(g.appId) };
+      const emoji = stock === 0 ? '🔴' : stock < LOW ? '🟡' : '🟢';
+      const maxLabelLen = 95;
+      const label = g.name.length > maxLabelLen ? g.name.slice(0, maxLabelLen - 3) + '...' : g.name;
+      return {
+        label,
+        value: String(g.appId),
+        description: `${stock} in stock`,
+        emoji: { name: emoji },
+      };
     });
     return new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
@@ -59,6 +65,14 @@ export function buildPanelMessagePayload() {
       .setLabel('🔄 Refresh Stock')
       .setStyle(ButtonStyle.Secondary)
   );
+  const stats = getGlobalStockStats();
+  const restock = getRestockStats();
+  const regenParts = [];
+  if (restock.in1h > 0) regenParts.push(`**${restock.in1h}** in <1h`);
+  if (restock.in6h > 0) regenParts.push(`**${restock.in6h}** in <6h`);
+  if (restock.in24h > 0) regenParts.push(`**${restock.in24h}** in <24h`);
+  const regenText = regenParts.length > 0 ? regenParts.join(' • ') : 'None';
+
   const embed = new EmbedBuilder()
     .setColor(0x1b2838)
     .setTitle('🎮 Game Activation Center')
@@ -66,6 +80,31 @@ export function buildPanelMessagePayload() {
       '**Request a Denuvo game activation** — Pick a game from the dropdown below. A private ticket opens, and an activator will handle your request and send you the authorization code.'
     )
     .addFields(
+      {
+        name: '📦 Available',
+        value: `**${stats.totalStock}** activation slots`,
+        inline: true,
+      },
+      {
+        name: '🎮 Games',
+        value: `**${stats.gamesInStock}/${stats.totalGames}** in stock`,
+        inline: true,
+      },
+      {
+        name: '🔥 Low stock',
+        value: `**${stats.lowStockCount}** games (<10 slots)`,
+        inline: true,
+      },
+      {
+        name: '🔄 Regenerating',
+        value: regenText,
+        inline: false,
+      },
+      {
+        name: '📖 Legend',
+        value: '🟢 **10+** slots • 🟡 **Under 10** • 🔴 **Empty**',
+        inline: false,
+      },
       {
         name: '✨ How it works',
         value: [
@@ -79,11 +118,6 @@ export function buildPanelMessagePayload() {
       {
         name: '💰 Cost',
         value: '**Free** — No points required',
-        inline: true,
-      },
-      {
-        name: '📦 Availability',
-        value: 'Games show stock count. Click **Refresh Stock** to update.',
         inline: true,
       },
       {
@@ -122,9 +156,7 @@ export async function execute(interaction) {
         const msg = await oldChannel.messages.fetch(existing.message_id).catch(() => null);
         if (msg) await msg.delete();
       }
-    } catch {
-      /* ignore */
-    }
+    } catch {}
     clearPanel();
   }
 

@@ -127,10 +127,6 @@ export function setTicketChannel(requestId, channelId) {
   scheduleSave();
 }
 
-/**
- * Returns pending requests with unverified screenshots older than maxAgeMinutes.
- * Uses SQLite datetime for correct comparison with created_at.
- */
 export function getUnverifiedPendingOlderThan(maxAgeMinutes) {
   return db.prepare(`
     SELECT id, buyer_id, game_app_id, ticket_channel_id, game_name

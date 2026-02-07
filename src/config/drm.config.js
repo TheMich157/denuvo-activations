@@ -1,9 +1,3 @@
-/**
- * drm.steam.run selector configuration.
- * Override via environment variables if the site structure changes.
- *
- * Format: CSS selector or "text:Button Text" for text-based lookup.
- */
 export const drmConfig = {
   baseUrl: process.env.DRM_BASE_URL || 'https://drm.steam.run',
   timeoutMs: parseInt(process.env.DRM_TIMEOUT_MS || '60000', 10),

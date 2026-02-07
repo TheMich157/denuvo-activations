@@ -45,7 +45,6 @@ export function canUseCommand(userId, commandName, member) {
       : { allowed: false, reason: 'Only activators can use this command.' };
   }
 
-  // Whitelist-only commands: only whitelisted users, staff/activators cannot run these unless whitelisted
   if (!isWhitelisted(userId)) {
     return { allowed: false, reason: 'You are not whitelisted to use commands.' };
   }

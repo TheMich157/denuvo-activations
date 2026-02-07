@@ -1,8 +1,3 @@
-/**
- * Debug logger. Enable with DEBUG=1 or DEBUG=denuvo:* in env.
- * Usage: debug('db')('message') or debug('interaction')('handler', data)
- */
-
 const enabled = process.env.DEBUG && /^(1|true|denuvo|denuvo:\*|denuvo:.*)$/i.test(process.env.DEBUG);
 
 function matchesScope(scope) {

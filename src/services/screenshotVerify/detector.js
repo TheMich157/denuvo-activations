@@ -1,7 +1,3 @@
-/**
- * Runs extracted text through pattern matchers.
- */
-
 import { PROPERTIES_PATTERNS, WUB_PATTERNS } from './patterns.js';
 
 function matchesAny(text, patterns) {
