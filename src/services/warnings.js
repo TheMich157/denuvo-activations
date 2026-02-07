@@ -1,5 +1,5 @@
 import { db, scheduleSave } from '../db/index.js';
-import { addBlacklist } from './blacklist.js';
+import { addToBlacklist } from './blacklist.js';
 
 const AUTO_BLACKLIST_THRESHOLD = 3;
 
@@ -16,7 +16,7 @@ export function addWarning(userId, reason, issuedBy) {
   const total = getWarningCount(userId);
   let autoBlacklisted = false;
   if (total >= AUTO_BLACKLIST_THRESHOLD) {
-    addBlacklist(userId, issuedBy, `Auto-blacklisted: ${total} warnings`);
+    addToBlacklist(userId, `Auto-blacklisted: ${total} warnings`, issuedBy);
     autoBlacklisted = true;
   }
   return { warningId: row?.id, totalWarnings: total, autoBlacklisted };
