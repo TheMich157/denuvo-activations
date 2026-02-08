@@ -19,6 +19,7 @@ import {
   import { notifyActivators } from './statusNotify.js';
   import { getUserTierInfo, getAdjustedCooldown, TIERS } from './tiers.js';
   import { db } from '../db/index.js';
+  import { getBrowserPool } from './browserPool.js';
   
   export async function createTicketForGame(interaction, appId, options = {}) {
     const { requireTicketCategory = false, preorder = false } = options;
@@ -166,6 +167,23 @@ import {
 
   if (autoAssigned) {
     const hasAutomated = !!getCredentials(best.activator_id, game.appId);
+    
+    // Check browser pool status for enhanced automation
+    let browserPoolStatus = null;
+    try {
+      const pool = getBrowserPool();
+      const stats = pool.getStats();
+      browserPoolStatus = {
+        available: stats.available > 0,
+        poolSize: stats.poolSize,
+        healthy: stats.errors === 0 || stats.errors < stats.created * 0.1 // Less than 10% error rate
+      };
+    } catch (error) {
+      browserPoolStatus = { available: false, poolSize: 0, healthy: false };
+    }
+    
+    const hasBrowserAutomation = browserPoolStatus.available && browserPoolStatus.healthy;
+    
     mainEmbed = new EmbedBuilder()
       .setColor(0x57f287)
       .setTitle(`🎮 Activation Request: ${getGameDisplayName(game)}`)
@@ -174,7 +192,9 @@ import {
           `**Requester:** <@${interaction.user.id}>`,
           `**Auto-assigned to:** <@${best.activator_id}>`,
           '',
-          hasAutomated
+          hasAutomated && hasBrowserAutomation
+            ? '🚀 **Enhanced Automation Available:** Use **Get code automatically** for fastest results with browser fallback. **Manual:** Use **Done** to paste the code.'
+            : hasAutomated
             ? '**Automatic:** Use **Get code automatically** (enter the confirmation code from your email when asked). **Manual:** Use **Done** to paste the code. Press **Help** if needed.'
             : 'Use **Done** to enter the auth code from drm.steam.run. Press **Help** if needed.',
         ].join('\n')
@@ -188,7 +208,18 @@ import {
         },
         { name: '1. Game folder Properties', value: 'Right‑click the game folder → **Properties** (dialog visible in screenshot)', inline: false },
         { name: '2. WUB (Windows Update Blocker)', value: 'Updates disabled/paused **and the red shield with X icon**', inline: false }
-      )
+      );
+
+    // Add browser automation status field if available
+    if (hasBrowserAutomation) {
+      mainEmbed.addFields({
+        name: '🌐 Browser Automation',
+        value: `✅ Enhanced browser automation ready (${browserPoolStatus.poolSize} instances available)`,
+        inline: true
+      });
+    }
+
+    mainEmbed
       .setFooter({ text: `Ticket ${ticketRef} • Post your screenshot, then activator can proceed` })
       .setTimestamp();
 
@@ -197,11 +228,20 @@ import {
       new ButtonBuilder().setCustomId('call_activator').setLabel('Help').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('close_ticket').setLabel('Close ticket').setStyle(ButtonStyle.Secondary),
     ];
+    
     if (hasAutomated) {
-      actionComponents.unshift(
-        new ButtonBuilder().setCustomId(`auto_code:${requestId}`).setLabel('Get code automatically').setStyle(ButtonStyle.Primary).setEmoji('⚡')
-      );
+      const autoButton = new ButtonBuilder()
+        .setCustomId(`auto_code:${requestId}`)
+        .setLabel(hasBrowserAutomation ? '⚡ Get code automatically' : 'Get code automatically')
+        .setStyle(ButtonStyle.Primary);
+      
+      if (hasBrowserAutomation) {
+        autoButton.setEmoji('⚡');
+      }
+      
+      actionComponents.unshift(autoButton);
     }
+    
     components = [new ActionRowBuilder().addComponents(actionComponents)];
   } else {
     const tierBadge = tierInfo.tier !== 'none' ? ` ${TIERS[tierInfo.tier].emoji} **${TIERS[tierInfo.tier].label}**` : '';

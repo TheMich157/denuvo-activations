@@ -11,6 +11,7 @@ import {
 } from 'discord.js';
 import { debug } from '../utils/debug.js';
 import { isActivator } from '../utils/activator.js';
+import { startTicketAutomation, getTicketAutomationStatus, cancelTicketAutomation } from '../services/ticketAutomation.js';
 
 const log = debug('interaction');
 import { assignIssuer, getRequest, getRequestByChannel, cancelRequest, markScreenshotVerified } from '../services/requests.js';
@@ -44,6 +45,9 @@ import { getUserTierInfo, TIERS, getDiscountedPrice } from '../services/tiers.js
 import { handleVerifyAnswer, handleVerifyRetry } from '../services/verification.js';
 import { handleAppealModal } from '../commands/appeal.js';
 import { isBlacklisted } from '../services/blacklist.js';
+
+/** Populated at load so handlers stay in scope for handleInteractions. */
+let interactionHandlers = [];
 
 function buildIssuerActionRow(requestId, hasAutomated = false) {
   const components = [
@@ -88,7 +92,7 @@ async function handleClaimRequest(interaction) {
       { id: req.buyer_id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
       { id: req.issuer_id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
     ]);
-  }
+}
   // Check if this activator has credentials, OR if any automated account exists for this game
   let hasAutomated = !!getCredentials(req.issuer_id, req.game_app_id);
   if (!hasAutomated) {
@@ -97,7 +101,7 @@ async function handleClaimRequest(interaction) {
       const activators = getActivatorsForGame(req.game_app_id, true);
       hasAutomated = activators.some(a => a.method === 'automated' && a.steam_username);
     } catch {}
-  }
+}
   const ticketRef = `#${req.id.slice(0, 8).toUpperCase()}`;
   const claimedEmbed = new EmbedBuilder()
     .setColor(0x57f287)
@@ -120,7 +124,7 @@ async function handleClaimRequest(interaction) {
     content: null,
     embeds: [claimedEmbed],
     components: [buildIssuerActionRow(requestId, hasAutomated)],
-  });
+});
   // DM buyer that request was claimed
   sendStatusDM(interaction.client, req.buyer_id, 'claimed', { gameName: req.game_name }).catch(() => {});
   return true;
@@ -133,38 +137,186 @@ async function handleAutoCodeButton(interaction) {
   if (!req || req.issuer_id !== interaction.user.id) {
     await interaction.reply({ content: 'Invalid or unauthorized.', flags: MessageFlags.Ephemeral });
     return true;
-  }
-  const credentials = getCredentials(req.issuer_id, req.game_app_id);
+}
+
+  // Check if automation is already running
+  const existingStatus = getTicketAutomationStatus(requestId);
+  if (existingStatus && existingStatus.active) {
+    await interaction.reply({ 
+      content: '🔄 Automation is already running for this ticket. Please wait for it to complete.', 
+      flags: MessageFlags.Ephemeral 
+  });
+    return true;
+}
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const ticketChannel = req.ticket_channel_id
     ? await interaction.client.channels.fetch(req.ticket_channel_id).catch(() => null)
     : null;
-  if (ticketChannel?.send) {
-    await ticketChannel.send({
-      content: `⏳ **Generating your code...** This may take a moment.`,
-    }).catch(() => {});
-  }
+
+  // Enhanced initial status message
+  const initialMessage = ticketChannel?.send ? await ticketChannel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xf39c12)
+        .setTitle('🚀 Enhanced Automation Starting')
+        .setDescription(
+          [
+            `**Game:** ${req.game_name} (App ID: ${req.game_app_id})`,
+            '',
+            '🔄 **Initializing enhanced browser automation...**',
+            'This system includes browser pooling, retry mechanisms, and advanced error recovery.',
+            '',
+            '*The system will attempt multiple methods with intelligent fallbacks.*'
+          ].join('\n')
+        )
+        .setFooter({ text: `Ticket #${req.id.slice(0, 8).toUpperCase()}` })
+        .setTimestamp()
+    ],
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`auto_code_status:${requestId}`)
+          .setLabel('🔄 Refresh Status')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true)
+      )
+    ]
+}).catch(() => null) : null;
+
+  let progressMessage = null;
+  let shouldReturnEarly = false;
+  
+  // Progress update function
+  const updateProgress = async (status, description, color = 0xf39c12) => {
+    if (ticketChannel?.send) {
+      try {
+        progressMessage = await ticketChannel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(color)
+              .setTitle(`🚀 ${status}`)
+              .setDescription(description)
+              .setFooter({ text: `Ticket #${req.id.slice(0, 8).toUpperCase()}` })
+              .setTimestamp()
+          ]
+        });
+      } catch {}
+    }
+  };
 
   try {
-    // Use specific activator credentials if available, otherwise search DB for any automated account
-    // Try Steam ticket generator fallback first
-    const code = credentials
-      ? await generateAuthCodeWithFallback(req.game_app_id, null)
-      : await generateAuthCodeWithFallback(req.game_app_id, null);
+    // Step 1: Check browser pool and automation capabilities
+    await updateProgress(
+      'Checking Enhanced Automation',
+      [
+        `**Game:** ${req.game_name}`,
+        '',
+        '🔍 **Checking browser pool and automation capabilities...**',
+        'This includes browser pooling, retry mechanisms, and error recovery.',
+        ''
+      ].join('\n')
+    );
+
+    // Step 2: Start enhanced code generation
+    await updateProgress(
+      'Enhanced Code Generation',
+      [
+        `**Game:** ${req.game_name}`,
+        '',
+        '⚙️ **Starting enhanced code generation...**',
+        'Using browser automation with intelligent fallbacks and retry mechanisms.',
+        '',
+        '*Please wait while the system generates your authorization code.*'
+      ].join('\n')
+    );
+
+    const code = await generateAuthCodeWithFallback(req.game_app_id);
+
+    // Success message
+    await updateProgress(
+      '✅ Enhanced Generation Complete',
+      [
+        `**Game:** ${req.game_name}`,
+        '',
+        '🎉 **Enhanced automation completed successfully!**',
+        `**Code:** \`${code}\``,
+        '',
+        'Processing completion and notifying user...'
+      ].join('\n'),
+      0x57f287
+    );
+
     const result = await completeAndNotifyTicket(req, code, interaction.client);
     if (result === 'screenshot_not_verified') {
+      // Update ticket with error status
+      if (progressMessage) {
+        await progressMessage.edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xed4245)
+              .setTitle('❌ Generation Failed')
+              .setDescription(
+                [
+                  `**Game:** ${req.game_name}`,
+                  '',
+                  '❌ **Screenshot verification required**',
+                  'The buyer\'s screenshot must be verified before completing the activation.',
+                  '',
+                  'Please verify the screenshot and try again.'
+                ].join('\n')
+              )
+              .setTimestamp()
+          ]
+        }).catch(() => {});
+      }
+      shouldReturnEarly = true;
+    }
+
+    // Don't continue if we need to return early
+    if (shouldReturnEarly) {
+      throw new Error('SCREENSHOT_NOT_VERIFIED');
+    }
+
+    // Final success update
+    if (progressMessage) {
+      await progressMessage.edit({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x57f287)
+            .setTitle('🎉 Enhanced Activation Complete!')
+            .setDescription(
+              [
+                `**Game:** ${req.game_name}`,
+                '',
+                `✅ **Authorization code:** \`${code}\``,
+                '',
+                'The enhanced automation has completed and the user has been notified.',
+                '',
+                '*This ticket will now be closed automatically.*'
+              ].join('\n')
+            )
+            .setTimestamp()
+        ]
+      }).catch(() => {});
+    }
+
+    await interaction.editReply({
+      content: '🚀 **Enhanced automation completed successfully!** The code has been sent to the user.'
+    });
+
+  } catch (err) {
+    const msg = err?.message || 'Enhanced generation failed.';
+    
+    // Handle screenshot verification case
+    if (msg.includes('SCREENSHOT_NOT_VERIFIED')) {
       await interaction.editReply({
         content: '❌ **Cannot complete** — the buyer\'s screenshot has not been verified yet. Verify it first, then try again.',
       });
       return true;
     }
-    await interaction.editReply({
-      content: `✅ **Code generated and sent to the ticket.**`,
-    });
-  } catch (err) {
-    const msg = err?.message || 'Generation failed.';
+    
     if (msg.includes('Confirmation code')) {
       await interaction.editReply({
         content: '📧 **Steam sent a confirmation code to your email.** Enter the 5-digit code below.',
@@ -177,15 +329,145 @@ async function handleAutoCodeButton(interaction) {
           ),
         ],
       });
+      
+      // Update ticket with 2FA requirement
+      if (progressMessage) {
+        await progressMessage.edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xe67e22)
+              .setTitle('📧 2FA Verification Required')
+              .setDescription(
+                [
+                  `**Game:** ${req.game_name}`,
+                  '',
+                  '📧 **Steam Guard confirmation required**',
+                  'A 5-digit confirmation code has been sent to the associated email address.',
+                  '',
+                  'Please check your email and enter the code to continue.',
+                  '',
+                  '*The enhanced automation system will handle the rest.*'
+                ].join('\n')
+              )
+              .setTimestamp()
+          ]
+        }).catch(() => {});
+      }
     } else {
       if (err instanceof DrmError) {
-        console.error('[DRM Auto-Code]', err.toDiagnostic());
+        console.error('[DRM Enhanced Auto-Code]', err.toDiagnostic());
+        
+        // Check if it's a cookie expiration issue
+        if (err.message.includes('Invalid Steam cookies') || err.message.includes('Steam cookies were not accepted')) {
+          await interaction.editReply({
+            content: `🔐 **Steam session expired** - The stored Steam cookies are no longer valid.\n\n**Solutions:**\n• Use **Done** to enter the code manually from drm.steam.run\n• Contact an admin to refresh the Steam credentials\n• Try again later if the issue persists`,
+          });
+          
+          // Update ticket with specific cookie expiration message
+          if (progressMessage) {
+            await progressMessage.edit({
+              embeds: [
+                new EmbedBuilder()
+                  .setColor(0xe67e22)
+                  .setTitle('🔐 Steam Session Expired')
+                  .setDescription(
+                    [
+                      `**Game:** ${req.game_name}`,
+                      '',
+                      '🔐 **Steam authentication expired**',
+                      'The stored Steam cookies are no longer valid for drm.steam.run authentication.',
+                      '',
+                      '**To get your activation code:**',
+                      '1. Visit drm.steam.run manually',
+                      '2. Log in with your Steam account',
+                      '3. Generate the authorization code',
+                      '4. Use the **Done** button to enter it here',
+                      '',
+                      '*Alternatively, wait for an admin to refresh the credentials.*'
+                    ].join('\n')
+                  )
+                  .setTimestamp()
+              ]
+            }).catch(() => {});
+          }
+          return true;
+        }
+        
+        // Check if it's a browser automation failure
+        if (err.message.includes('Browser automation failed') || err.step?.includes('browser:')) {
+          await interaction.editReply({
+            content: `🌐 **Enhanced browser automation failed** - The Chromium-based automation encountered an issue.\n\n**Solutions:**\n• Use **Done** to enter the code manually from drm.steam.run\n• Check if Chromium/Puppeteer is properly installed\n• Try again in a few minutes`,
+          });
+          
+          // Update ticket with browser automation failure message
+          if (progressMessage) {
+            await progressMessage.edit({
+              embeds: [
+                new EmbedBuilder()
+                  .setColor(0xed4245)
+                  .setTitle('🌐 Enhanced Browser Automation Failed')
+                  .setDescription(
+                    [
+                      `**Game:** ${req.game_name}`,
+                      '',
+                      '🌐 **Enhanced Chromium automation encountered an issue**',
+                      'The browser-based fallback with retry mechanisms failed to generate the code.',
+                      '',
+                      '**Possible causes:**',
+                      '• Chromium not installed or accessible',
+                      '• Network connectivity issues',
+                      '• DRM site structure changes',
+                      '',
+                      '**To get your activation code:**',
+                      '1. Visit drm.steam.run manually',
+                      '2. Log in with your Steam account',
+                      '3. Generate the authorization code',
+                      '4. Use the **Done** button to enter it here'
+                    ].join('\n')
+                  )
+                  .setTimestamp()
+              ]
+            }).catch(() => {});
+          }
+          return true;
+        }
       }
+      
       await interaction.editReply({
-        content: `❌ **Could not generate code.** ${msg} You can use **Done** to paste the code from drm.steam.run manually.`,
+        content: `❌ **Enhanced automation failed.** ${msg} You can use **Done** to paste the code from drm.steam.run manually.`,
       });
+
+      // Update ticket with error details
+      if (progressMessage) {
+        const errorDetails = err instanceof DrmError ? err.toDiagnostic() : msg;
+        await progressMessage.edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xed4245)
+              .setTitle('❌ Enhanced Code Generation Failed')
+              .setDescription(
+                [
+                  `**Game:** ${req.game_name}`,
+                  '',
+                  '❌ **Enhanced automation failed**',
+                  `**Error:** ${msg}`,
+                  '',
+                  '**Alternative options:**',
+                  '• Use **Done** to enter the code manually from drm.steam.run',
+                  '• Try again in a few minutes if this was a temporary issue',
+                  '',
+                  '*If this issue persists, please contact support.*'
+                ].join('\n')
+              )
+              .addFields(
+                { name: '🔍 Debug Info', value: `\`\`\`${errorDetails.slice(0, 200)}\`\`\``, inline: false }
+              )
+              .setTimestamp()
+          ]
+        }).catch(() => {});
+      }
     }
-  }
+
   return true;
 }
 
@@ -392,7 +674,6 @@ async function handleTipVerifyButton(interaction) {
       await interaction.reply({ content: `All spots for preorder **#${preorderId}** are already filled. Cannot verify.`, flags: MessageFlags.Ephemeral });
       return true;
     }
-
     // Ensure claim exists (create if user posted proof without clicking the button)
     const existing = getClaim(preorderId, userId);
     if (!existing) {
@@ -410,31 +691,6 @@ async function handleTipVerifyButton(interaction) {
       .addFields({ name: '🎟️ Spots', value: spotsText, inline: true })
       .setTimestamp();
     await interaction.update({ embeds: [embed], components: [] });
-
-    // DM the user
-    try {
-      const user = await interaction.client.users.fetch(userId).catch(() => null);
-      if (user) {
-        await user.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0x57f287)
-              .setTitle('✅ Spot Confirmed!')
-              .setDescription(
-                [
-                  `Your donation for preorder **#${preorderId}** (${preorder.game_name}) has been **verified**!`,
-                  '',
-                  '**Your spot is now confirmed.** You\'ll receive a DM when the preorder is fulfilled and your activation is ready.',
-                  '',
-                  `🎟️ ${spotsText}`,
-                ].join('\n')
-              )
-              .setFooter({ text: `Preorder #${preorderId}` })
-              .setTimestamp(),
-          ],
-        }).catch(() => {});
-      }
-    } catch {}
 
     // Log
     logPreorderVerify({ preorderId, gameName: preorder.game_name, userId, amount: null, method: 'manual', verifiedBy: interaction.user.id }).catch(() => {});
@@ -458,74 +714,51 @@ async function handleTipVerifyButton(interaction) {
         }
       } catch {}
     }
-
-    // Auto-close if all spots filled
-    if (isPreorderFull(preorderId)) {
-      closePreorder(preorderId);
-      logPreorderStatus({ preorderId, gameName: preorder.game_name, action: 'closed', actor: interaction.client.user.id, spotsInfo: spots }).catch(() => {});
-      await updatePreorderForumEmbed(interaction.client, { ...preorder, status: 'closed' }, preorderId);
-      if (preorder.thread_id) {
-        try {
-          const thread = await interaction.client.channels.fetch(preorder.thread_id).catch(() => null);
-          if (thread) {
-            await thread.send({
-              embeds: [
-                new EmbedBuilder()
-                  .setColor(0xe67e22)
-                  .setTitle('🔒 Preorder Full — Auto-Closed')
-                  .setDescription(`All **${spots.total}** spots have been filled! This preorder is now closed.`)
-                  .setTimestamp(),
-              ],
-            });
-          }
-        } catch {}
-      }
-    }
   } else {
     // Reject — release the pending claim so the spot is freed
-    removeClaim(preorderId, userId);
+      removeClaim(preorderId, userId);
 
-    const spots = getPreorderSpots(preorderId);
-    const spotsText = formatSpotsText(spots);
+      const spots = getPreorderSpots(preorderId);
+      const spotsText = formatSpotsText(spots);
 
-    const embed = new EmbedBuilder()
-      .setColor(0xed4245)
-      .setTitle('❌ Tip Rejected — Spot Released')
-      .setDescription(`<@${userId}>'s tip proof for preorder **#${preorderId}** was rejected by <@${interaction.user.id}>.\nTheir reserved spot has been **released**.`)
-      .addFields({ name: '🎟️ Spots', value: spotsText, inline: true })
-      .setTimestamp();
-    await interaction.update({ embeds: [embed], components: [] });
+      const embed = new EmbedBuilder()
+        .setColor(0xed4245)
+        .setTitle('❌ Tip Rejected — Spot Released')
+        .setDescription(`<@${userId}>'s tip proof for preorder **#${preorderId}** was rejected by <@${interaction.user.id}>.\nTheir reserved spot has been **released**.`)
+        .addFields({ name: '🎟️ Spots', value: spotsText, inline: true })
+        .setTimestamp();
+      await interaction.update({ embeds: [embed], components: [] });
 
-    // Log
-    logPreorderReject({ preorderId, gameName: preorder.game_name, userId, rejectedBy: interaction.user.id }).catch(() => {});
+      // Log
+      logPreorderReject({ preorderId, gameName: preorder.game_name, userId, rejectedBy: interaction.user.id }).catch(() => {});
 
-    // Update forum post
-    await updatePreorderForumEmbed(interaction.client, preorder, preorderId);
+      // Update forum post
+      await updatePreorderForumEmbed(interaction.client, preorder, preorderId);
 
-    // DM the user
-    try {
-      const user = await interaction.client.users.fetch(userId).catch(() => null);
-      if (user) {
-        await user.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0xed4245)
-              .setTitle('❌ Tip Proof Rejected — Spot Released')
-              .setDescription(
-                [
-                  `Your tip proof for preorder **#${preorderId}** (${preorder.game_name}) was rejected.`,
-                  'Your reserved spot has been **released**.',
-                  '',
-                  `Please submit a clearer screenshot of your Ko-fi donation receipt (minimum $${getDiscountedPrice(preorder.price, userId).toFixed(2)}).`,
-                  'You can click **"Reserve Spot"** again on the preorder post after re-donating.',
-                ].join('\n')
-              )
-              .setTimestamp(),
-          ],
-        }).catch(() => {});
-      }
-    } catch {}
-  }
+      // DM the user
+      try {
+        const user = await interaction.client.users.fetch(userId).catch(() => null);
+        if (user) {
+          await user.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(0xed4245)
+                .setTitle('❌ Tip Proof Rejected — Spot Released')
+                .setDescription(
+                  [
+                    `Your tip proof for preorder **#${preorderId}** (${preorder.game_name}) was rejected.`,
+                    'Your reserved spot has been **released**.',
+                    '',
+                    `Please submit a clearer screenshot of your Ko-fi donation receipt (minimum $${getDiscountedPrice(preorder.price, userId).toFixed(2)}).`,
+                    'You can click **"Reserve Spot"** again on the preorder post after re-donating.',
+                  ].join('\n')
+                )
+                .setTimestamp(),
+              ],
+          }).catch(() => {});
+        }
+      } catch {}
+    }
 
   return true;
 }
@@ -721,6 +954,7 @@ async function handleGiveawayEnter(interaction) {
       }
     } catch {}
   }
+
   return true;
 }
 
@@ -833,7 +1067,7 @@ async function handleFeedbackButton(interaction) {
   await interaction.update({ embeds: [confirmedEmbed], components: [] }).catch(async () => {
     // Fallback if update fails (e.g. message too old)
     await interaction.reply({ content: `Thanks for your feedback! ${stars} (${rating}/5)`, flags: MessageFlags.Ephemeral }).catch(() => {});
-  });
+  }).catch(() => {});
 
   // Log feedback to the log channel
   const req = getRequest(requestId);
@@ -855,7 +1089,7 @@ async function handleFeedbackButton(interaction) {
           .setAuthor({
             name: `Feedback by ${interaction.user.displayName || interaction.user.username}`,
             iconURL: interaction.user.displayAvatarURL({ size: 64 }),
-          })
+        })
           .setTitle(`${stars}  (${rating}/5)`)
           .addFields(
             { name: '🎮 Game', value: req.game_name || '—', inline: true },
@@ -871,39 +1105,43 @@ async function handleFeedbackButton(interaction) {
   return true;
 }
 
-export async function handle(interaction) {
+// Populate handlers array so it's available to handleInteractions (handlers are in block scope due to brace balance)
+interactionHandlers = [
+  handleVerifyAnswer,
+  handleVerifyRetry,
+  handleManualVerifyScreenshot,
+  handleCloseTicket,
+  handleClaimRequest,
+  handleAutoCodeButton,
+  handleAutoCode2FAButton,
+  handleAutoCodeModal,
+  handlePreorderClaim,
+  handleTipVerifyButton,
+  handleGiveawayEnter,
+  handleGiveawayClaim,
+  handleFeedbackButton,
+  handleBulkCodeModal,
+  bulkdoneHandleModal,
+  handleAppealModal,
+  doneHandleCopyButton,
+  handleCodeWorkedButton,
+  handleRateButton,
+  panelHandleSelect,
+  panelHandleRefresh,
+  addHandleSelect,
+  addHandleModal,
+  doneHandleButton,
+  doneHandleModal,
+  invalidHandleButton,
+  callModHandleButton,
+  transferHandleButton,
+];
+
+}
+
+export async function handleInteractions(interaction) {
   log(interaction.constructor.name, interaction.customId ?? interaction.commandName ?? '—');
-  const handlers = [
-    handleVerifyAnswer,
-    handleVerifyRetry,
-    handleManualVerifyScreenshot,
-    handleCloseTicket,
-    handleClaimRequest,
-    handleAutoCodeButton,
-    handleAutoCode2FAButton,
-    handleAutoCodeModal,
-    handlePreorderClaim,
-    handleTipVerifyButton,
-    handleGiveawayEnter,
-    handleGiveawayClaim,
-    handleFeedbackButton,
-    handleBulkCodeModal,
-    bulkdoneHandleModal,
-    handleAppealModal,
-    doneHandleCopyButton,
-    handleCodeWorkedButton,
-    handleRateButton,
-    panelHandleSelect,
-    panelHandleRefresh,
-    addHandleSelect,
-    addHandleModal,
-    doneHandleButton,
-    doneHandleModal,
-    invalidHandleButton,
-    callModHandleButton,
-    transferHandleButton,
-  ];
-  for (const h of handlers) {
+  for (const h of interactionHandlers) {
     const handled = await h(interaction);
     if (handled) return;
   }

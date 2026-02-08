@@ -131,6 +131,16 @@ export function cancelRequest(requestId) {
   return true;
 }
 
+export function updateRequestStatus(requestId, status) {
+  if (!isValidRequestId(requestId)) return false;
+  const validStatuses = ['pending', 'in_progress', 'completed', 'cancelled', 'failed', 'automating'];
+  if (!validStatuses.includes(status)) return false;
+  
+  db.prepare(`UPDATE requests SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(status, requestId);
+  scheduleSave();
+  return true;
+}
+
 export function setTicketChannel(requestId, channelId) {
   if (!isValidRequestId(requestId)) return;
   db.prepare('UPDATE requests SET ticket_channel_id = ? WHERE id = ?').run(String(channelId), requestId);

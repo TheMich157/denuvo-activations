@@ -139,7 +139,7 @@ export async function handleSelect(interaction) {
     new ActionRowBuilder().addComponents(
       new TextInputBuilder()
         .setCustomId('consent')
-        .setLabel('Staff view credentials if auto fails? (yes/no)')
+        .setLabel('Staff view credentials if auto fails?')
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setPlaceholder('yes or no')

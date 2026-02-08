@@ -20,7 +20,7 @@ import { MessageFlags } from 'discord.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const { handle } = await import(new URL('./src/handlers/interactions.js', import.meta.url).href);
+const { handleInteractions } = await import(new URL('./src/handlers/interactions.js', import.meta.url).href);
 
 validateConfig();
 await initDb();
@@ -122,7 +122,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
   }
-  return handle(interaction);
+  return handleInteractions(interaction);
 });
 
 client.on(Events.MessageCreate, handleMessage);

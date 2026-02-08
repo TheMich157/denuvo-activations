@@ -12,6 +12,7 @@
     "dotenv": "^16.4.5",
     "groq": "^1.2.0",
     "node-fetch": "^3.3.2",
+    "puppeteer": "^23.10.1",
     "sql.js": "^1.13.0",
     "steam-session": "^1.9.4",
     "tesseract.js": "^5.1.0"

@@ -5,6 +5,7 @@ import { createHash } from 'crypto';
 import { drmConfig } from '../config/drm.config.js';
 import { steamTicketConfig, validateSteamTicketConfig } from '../config/steamTicket.config.js';
 import { debug } from '../utils/debug.js';
+import { generateDrmCodeWithBrowserPool } from './browserPool.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR || join(__dirname, '../../data');
@@ -307,6 +308,8 @@ const STEAM_DOMAINS = [
   'store.steampowered.com',
   'login.steampowered.com',
   'help.steampowered.com',
+  'drm.steam.run',
+  'steampowered.com',
 ];
 
 function isDrmHost(urlStr) {
@@ -425,6 +428,49 @@ function snippet(str, len = 300) {
 }
 
 /**
+ * Validate Steam cookies by checking if they can access a Steam page
+ * @param {string[]} steamCookieStrings - Array of Steam cookie strings
+ * @returns {Promise<boolean>} - True if cookies are valid, false otherwise
+ */
+async function validateSteamCookies(steamCookieStrings) {
+  if (!steamCookieStrings || steamCookieStrings.length === 0) {
+    return false;
+  }
+
+  const jar = new CookieJar();
+  
+  // Import cookies to Steam domains only
+  for (const domain of STEAM_DOMAINS) {
+    if (domain === 'drm.steam.run' || domain === DRM_HOST) continue;
+    jar.importStrings(domain, steamCookieStrings);
+  }
+
+  try {
+    // Try to access Steam account page - this will fail if cookies are expired
+    const response = await httpGet('https://steamcommunity.com/profile/', jar);
+    
+    // If we get redirected to login, cookies are invalid
+    if (response.url.includes('/login/') || response.status === 302) {
+      return false;
+    }
+    
+    // Check if page contains login indicators
+    const cheerio = await import('cheerio');
+    const $ = cheerio.load(response.body);
+    
+    // If we see login forms, we're not logged in
+    if ($('form[action*="login"]').length > 0 || $('#steamAccountName').length > 0) {
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    log('validateSteamCookies: Error validating cookies:', error.message);
+    return false;
+  }
+}
+
+/**
  * Login to drm.steam.run using Steam web cookies via the OpenID flow.
  *
  * Real flow observed:
@@ -435,16 +481,24 @@ function snippet(str, len = 300) {
  *   →  drm.steam.run/auth/steam_callback.php  (sets session cookie)
  */
 async function drmLogin(steamCookieStrings) {
+  if (!await validateSteamCookies(steamCookieStrings)) {
+    throw new Error('Invalid Steam cookies');
+  }
+
   const jar = new CookieJar();
   const cheerio = await import('cheerio');
 
+  // Import Steam cookies to Steam domains only
   for (const domain of STEAM_DOMAINS) {
+    if (domain === 'drm.steam.run' || domain === DRM_HOST) continue;
     jar.importStrings(domain, steamCookieStrings);
   }
 
-  // Ensure sessionid cookie exists for all Steam domains — required for OpenID approval.
+  // Ensure sessionid cookie exists for Steam domains — required for OpenID approval.
   // steam-session sometimes omits it or returns one that doesn't match the web session.
+  // Skip drm.steam.run as it's the target domain, not a Steam domain.
   for (const domain of STEAM_DOMAINS) {
+    if (domain === 'drm.steam.run' || domain === DRM_HOST) continue;
     if (!jar.cookies[domain]?.sessionid) {
       const id = createHash('sha256')
         .update(`${Date.now()}${Math.random()}`)
@@ -458,6 +512,12 @@ async function drmLogin(steamCookieStrings) {
   log('drmLogin: cookie domains:', Object.keys(jar.cookies).join(', '));
   log('drmLogin: cookie names per domain:',
     Object.entries(jar.cookies).map(([d, c]) => `${d}=[${Object.keys(c).join(',')}]`).join(' '));
+  
+  // Log Steam vs DRM domain separation
+  const steamDomains = Object.keys(jar.cookies).filter(d => !d.includes('drm.steam.run'));
+  const drmDomains = Object.keys(jar.cookies).filter(d => d.includes('drm.steam.run'));
+  log('drmLogin: Steam domains:', steamDomains.join(', ') || '(none)');
+  log('drmLogin: DRM domains:', drmDomains.join(', ') || '(none)');
 
   // 1. Visit drm site, check if already logged in
   log('drmLogin: visiting', drmConfig.baseUrl);
@@ -1450,21 +1510,46 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
 
   // 4. Login to drm.steam.run via OpenID
   let jar;
-  try {
-    jar = await drmLogin(steamCookies);
-  } catch (err) {
-    if (err instanceof DrmError) {
-      log('generateAuthCode: DRM login failed:', err.toDiagnostic());
+  let retryCount = 0;
+  const maxRetries = 2;
+  
+  while (retryCount <= maxRetries) {
+    try {
+      jar = await drmLogin(steamCookies);
+      break; // Success, exit retry loop
+    } catch (err) {
+      if (err instanceof DrmError) {
+        log('generateAuthCode: DRM login failed:', err.toDiagnostic());
+        
+        // If it's an invalid cookies error and we haven't exhausted retries, try to refresh cookies
+        if (err.message.includes('Invalid Steam cookies') && retryCount < maxRetries && credentials.refreshToken) {
+          log('generateAuthCode: Attempting cookie refresh, retry', retryCount + 1);
+          retryCount++;
+          
+          try {
+            const freshCookies = await steamAuthFromToken(credentials.refreshToken);
+            if (freshCookies) {
+              steamCookies = freshCookies;
+              log('generateAuthCode: Cookie refresh successful, retrying DRM login');
+              continue;
+            }
+          } catch (refreshErr) {
+            log('generateAuthCode: Cookie refresh failed:', refreshErr?.message);
+          }
+        }
+        
+        throw new DrmError(
+          `Could not login to drm.steam.run. ${err.message}`,
+          { ...err, step: `generateAuthCode>${err.step}`, cause: err }
+        );
+      }
+      
+      log('generateAuthCode: DRM login failed (generic):', err?.message);
       throw new DrmError(
-        `Could not login to drm.steam.run. ${err.message}`,
-        { ...err, step: `generateAuthCode>${err.step}`, cause: err }
+        `Could not login to drm.steam.run. ${err?.message || 'Unknown error'}`,
+        { step: 'generateAuthCode:drmLogin', cause: err }
       );
     }
-    log('generateAuthCode: DRM login failed (generic):', err?.message);
-    throw new DrmError(
-      `Could not login to drm.steam.run. ${err?.message || 'Unknown error'}`,
-      { step: 'generateAuthCode:drmLogin', cause: err }
-    );
   }
 
   // 5. Extract the code
@@ -1603,9 +1688,42 @@ export async function generateAuthCodeWithFallback(gameAppId, confirmCode = null
     }
   }
 
-  // Fall back to original DRM method
-  log('Using original DRM method');
-  return await generateAuthCodeForRequest(gameAppId, confirmCode);
+  // Try original DRM method
+  try {
+    log('Using original DRM method');
+    return await generateAuthCodeForRequest(gameAppId, confirmCode);
+  } catch (drmError) {
+    log(`DRM method failed: ${drmError.message}`);
+    
+    // If DRM failed due to authentication issues, try browser automation
+    if (drmError.message.includes('Invalid Steam cookies') || 
+        drmError.message.includes('Steam cookies were not accepted') ||
+        drmError.message.includes('Could not authenticate with drm.steam.run')) {
+      
+      log('Attempting browser automation fallback');
+      
+      try {
+        // Get credentials for browser automation
+        const { getActivatorsForGame, getCredentials: getCredsFromDb } = await import('./activators.js');
+        const activators = getActivatorsForGame(appId, true);
+        const automated = activators.filter(a => a.method === 'automated' && a.steam_username);
+        
+        if (automated.length > 0) {
+          const credentials = getCredsFromDb(automated[0].id, appId);
+          if (credentials) {
+            log('Using browser automation pool with credentials');
+            return await generateDrmCodeWithBrowserPool(appId, credentials, confirmCode);
+          }
+        }
+      } catch (browserError) {
+        log(`Browser automation fallback failed: ${browserError.message}`);
+        // Continue to throw the original DRM error
+      }
+    }
+    
+    // If we get here, both DRM and browser automation failed
+    throw drmError;
+  }
 }
 
 /**
