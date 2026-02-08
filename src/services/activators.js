@@ -9,17 +9,29 @@ export function addActivatorGame(activatorId, gameAppId, gameName, method, crede
   if (!isValidDiscordId(activatorId) || !isValidAppId(gameAppId)) throw new Error('Invalid activator or game ID');
   if (!['manual', 'automated'].includes(method)) throw new Error('Invalid method');
   const q = Math.max(1, Math.min(9999, stockQuantity));
-  const stmt = db.prepare(`
-    INSERT OR REPLACE INTO activator_games (activator_id, game_app_id, game_name, method, credentials_encrypted, steam_username, stock_quantity, creds_viewable)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
   let encrypted = null;
   let steamUsername = null;
   if (method === 'automated' && credentials) {
     encrypted = encrypt(JSON.stringify(credentials), config.encryptionKey);
     steamUsername = credentials.username ?? null;
   }
-  stmt.run(activatorId, gameAppId, gameName, method, encrypted, steamUsername, q, credsViewable ? 1 : 0);
+  // Check if this exact account already exists (same activator + game + steam username)
+  const existing = db.prepare(
+    'SELECT id FROM activator_games WHERE activator_id = ? AND game_app_id = ? AND steam_username = ?'
+  ).get(activatorId, gameAppId, steamUsername);
+  if (existing) {
+    // Update existing entry
+    db.prepare(`
+      UPDATE activator_games SET game_name = ?, method = ?, credentials_encrypted = ?, stock_quantity = ?, creds_viewable = ?
+      WHERE id = ?
+    `).run(gameName, method, encrypted, q, credsViewable ? 1 : 0, existing.id);
+  } else {
+    // Insert new entry (allows multiple accounts per game)
+    db.prepare(`
+      INSERT INTO activator_games (activator_id, game_app_id, game_name, method, credentials_encrypted, steam_username, stock_quantity, creds_viewable)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(activatorId, gameAppId, gameName, method, encrypted, steamUsername, q, credsViewable ? 1 : 0);
+  }
   scheduleSave();
 }
 
@@ -40,6 +52,9 @@ export function addActivatorStock(activatorId, gameAppId, gameName, quantity) {
   scheduleSave();
 }
 
+const LOW_STOCK_THRESHOLD = 2;
+const lowStockNotified = new Set(); // track activator:game combos already notified
+
 export function decrementActivatorStock(activatorId, gameAppId) {
   const row = db.prepare(
     'SELECT stock_quantity FROM activator_games WHERE activator_id = ? AND game_app_id = ?'
@@ -56,6 +71,28 @@ export function decrementActivatorStock(activatorId, gameAppId) {
     'INSERT INTO stock_restock_queue (activator_id, game_app_id, restock_at) VALUES (?, ?, ?)'
   ).run(activatorId, gameAppId, restockAt);
   scheduleSave();
+
+  // Low stock warning — queue a DM to the activator
+  const newQty = Math.max(0, (row.stock_quantity ?? 0) - 1);
+  const key = `${activatorId}:${gameAppId}`;
+  if (newQty <= LOW_STOCK_THRESHOLD && newQty > 0 && !lowStockNotified.has(key)) {
+    lowStockNotified.add(key);
+    const game = getGameByAppId(gameAppId);
+    const gameName = game?.name || `App ${gameAppId}`;
+    // Emit event for the bot to pick up (non-blocking)
+    queueLowStockWarning(activatorId, gameName, newQty);
+  } else if (newQty > LOW_STOCK_THRESHOLD) {
+    lowStockNotified.delete(key);
+  }
+}
+
+// Low stock warning queue — consumed by the bot client
+const lowStockQueue = [];
+export function queueLowStockWarning(activatorId, gameName, remaining) {
+  lowStockQueue.push({ activatorId, gameName, remaining, timestamp: Date.now() });
+}
+export function drainLowStockWarnings() {
+  return lowStockQueue.splice(0);
 }
 
 export function removeActivatorStock(activatorId, gameAppId, quantity) {
@@ -181,6 +218,14 @@ export function getDailyCount(steamAccountId) {
   return row?.count ?? 0;
 }
 
+export function getDailyActivationCount(steamAccountId, date) {
+  const d = date || new Date().toISOString().slice(0, 10);
+  const row = db.prepare(
+    'SELECT count FROM daily_activations WHERE steam_account_id = ? AND date = ?'
+  ).get(steamAccountId, d);
+  return row?.count ?? 0;
+}
+
 export function getAvailableStockForGame(gameAppId) {
   const rows = db.prepare(`
     SELECT activator_id, steam_username, COALESCE(stock_quantity, 5) AS qty
@@ -259,9 +304,10 @@ export function cleanupOldData() {
 
   // Remove activator_games and restock queue entries for games no longer in list.json
   const dbAppIds = db.prepare('SELECT DISTINCT game_app_id FROM activator_games').all();
-  const staleIds = dbAppIds.filter(r => !getGameByAppId(r.game_app_id)).map(r => r.game_app_id);
-  if (staleIds.length > 0) {
-    for (const appId of staleIds) {
+  const queueAppIds = db.prepare('SELECT DISTINCT game_app_id FROM stock_restock_queue').all();
+  const allAppIds = new Set([...dbAppIds.map(r => r.game_app_id), ...queueAppIds.map(r => r.game_app_id)]);
+  for (const appId of allAppIds) {
+    if (!getGameByAppId(appId)) {
       db.prepare('DELETE FROM activator_games WHERE game_app_id = ?').run(appId);
       db.prepare('DELETE FROM stock_restock_queue WHERE game_app_id = ?').run(appId);
     }

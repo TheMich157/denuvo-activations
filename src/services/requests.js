@@ -131,6 +131,10 @@ export function cancelRequest(requestId) {
   if (!req) return false;
   if (req.status === 'completed' || req.status === 'cancelled' || req.status === 'failed') return false;
   db.prepare(`UPDATE requests SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?`).run(requestId);
+  // Refund skip token if one was used and request was never completed
+  if (req.used_skip_token) {
+    import('./skipTokens.js').then(m => m.addTokens(req.buyer_id, 1)).catch(() => {});
+  }
   scheduleSave();
   return true;
 }
@@ -143,10 +147,11 @@ export function setTicketChannel(requestId, channelId) {
 
 export function getUnverifiedPendingOlderThan(maxAgeMinutes) {
   return db.prepare(`
-    SELECT id, buyer_id, game_app_id, ticket_channel_id, game_name
+    SELECT id, buyer_id, game_app_id, ticket_channel_id, game_name, status
     FROM requests
-    WHERE status = 'pending'
+    WHERE status IN ('pending', 'in_progress')
       AND (screenshot_verified IS NULL OR screenshot_verified = 0)
+      AND COALESCE(no_auto_close, 0) = 0
       AND datetime(created_at) < datetime('now', '-' || ? || ' minutes')
   `).all(maxAgeMinutes);
 }
@@ -179,6 +184,56 @@ export function getUserActiveRequests(userId) {
     WHERE buyer_id = ? AND status IN ('pending', 'in_progress')
     ORDER BY created_at ASC
   `).all(userId);
+}
+
+/** SLA stats: average completion time (minutes) for recent completed requests. */
+export function getAvgCompletionMinutes(limit = 50) {
+  const rows = db.prepare(`
+    SELECT ROUND((julianday(completed_at) - julianday(created_at)) * 1440, 1) AS mins
+    FROM requests WHERE status = 'completed' AND completed_at IS NOT NULL
+    ORDER BY completed_at DESC LIMIT ?
+  `).all(limit);
+  if (rows.length === 0) return null;
+  const sum = rows.reduce((a, r) => a + (r.mins ?? 0), 0);
+  return Math.round(sum / rows.length);
+}
+
+/** SLA stats per activator: avg completion time, total completed, avg rating. */
+export function getActivatorSLA(activatorId) {
+  const completion = db.prepare(`
+    SELECT COUNT(*) AS total,
+           ROUND(AVG((julianday(completed_at) - julianday(created_at)) * 1440), 1) AS avg_mins,
+           MIN(ROUND((julianday(completed_at) - julianday(created_at)) * 1440, 1)) AS best_mins,
+           MAX(ROUND((julianday(completed_at) - julianday(created_at)) * 1440, 1)) AS worst_mins
+    FROM requests WHERE issuer_id = ? AND status = 'completed' AND completed_at IS NOT NULL
+  `).get(activatorId);
+  const rating = db.prepare(`
+    SELECT AVG(rating) AS avg_rating, COUNT(*) AS total_ratings
+    FROM activator_ratings WHERE activator_id = ?
+  `).get(activatorId);
+  const recent24h = db.prepare(`
+    SELECT COUNT(*) AS n FROM requests
+    WHERE issuer_id = ? AND status = 'completed' AND datetime(completed_at) > datetime('now', '-24 hours')
+  `).get(activatorId);
+  return {
+    totalCompleted: completion?.total ?? 0,
+    avgMinutes: completion?.avg_mins ? Math.round(completion.avg_mins) : null,
+    bestMinutes: completion?.best_mins ? Math.round(completion.best_mins) : null,
+    worstMinutes: completion?.worst_mins ? Math.round(completion.worst_mins) : null,
+    avgRating: rating?.avg_rating ? parseFloat(rating.avg_rating.toFixed(1)) : null,
+    totalRatings: rating?.total_ratings ?? 0,
+    completedLast24h: recent24h?.n ?? 0,
+  };
+}
+
+/** Get unclaimed pending requests older than X minutes. */
+export function getUnclaimedPendingOlderThan(minutes) {
+  return db.prepare(`
+    SELECT id, buyer_id, game_app_id, game_name, ticket_channel_id, created_at
+    FROM requests
+    WHERE status = 'pending' AND issuer_id IS NULL
+      AND datetime(created_at) < datetime('now', '-' || ? || ' minutes')
+  `).all(minutes);
 }
 
 /** All open requests (pending or in_progress) that have a ticket channel. */

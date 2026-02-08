@@ -1,10 +1,11 @@
-import { processRestockQueue, cleanupOldData } from './activators.js';
+import { processRestockQueue, cleanupOldData, drainLowStockWarnings } from './activators.js';
 import { syncPanelMessage } from './panel.js';
 import { buildPanelMessagePayload } from '../commands/ticketpanel.js';
 import { stockConfig } from '../config/stock.js';
 import { debug } from '../utils/debug.js';
 import { logRestockBatch } from './activationLog.js';
 import { getGameByAppId } from '../utils/games.js';
+import { notifyWaitlistAndClear } from './waitlist.js';
 
 const log = debug('stockRestock');
 let intervalId = null;
@@ -41,6 +42,23 @@ export function startStockRestock(client) {
         } catch (err) {
           log('Panel sync after restock failed:', err?.message);
         }
+        // Notify waitlisted users when games restock
+        const restoredGames = new Set(rows.map((r) => r.game_app_id));
+        for (const appId of restoredGames) {
+          notifyWaitlistAndClear(clientRef, appId).catch(() => {});
+        }
+      }
+    }
+    // Send low stock warning DMs
+    if (clientRef) {
+      const warnings = drainLowStockWarnings();
+      for (const w of warnings) {
+        try {
+          const user = await clientRef.users.fetch(w.activatorId).catch(() => null);
+          if (user) {
+            await user.send(`⚠️ **Low stock warning** — **${w.gameName}** has only **${w.remaining}** activation${w.remaining !== 1 ? 's' : ''} left. Use \`/add\` to restock.`).catch(() => {});
+          }
+        } catch {}
       }
     }
   }, intervalMs);

@@ -1,4 +1,4 @@
-import { getUnverifiedPendingOlderThan } from './requests.js';
+import { getUnverifiedPendingOlderThan, getUnclaimedPendingOlderThan } from './requests.js';
 import { cancelRequest, setCooldown } from './requests.js';
 import { clearState } from './screenshotVerify/state.js';
 import { ticketConfig } from '../config/ticket.js';
@@ -11,6 +11,8 @@ import { addWarning } from './warnings.js';
 import { removeStaleUnverifiedClaims, getPreorderSpots, formatSpotsText, buildPreorderEmbed } from './preorder.js';
 import { config } from '../config.js';
 import { EmbedBuilder } from 'discord.js';
+import { getActivatorsForGame } from './activators.js';
+import { isAway } from './activatorStatus.js';
 
 const log = debug('ticketAutoClose');
 
@@ -19,6 +21,8 @@ let intervalId = null;
 
 const STALE_TICKET_MINUTES = 120; // 2 hours idle for in_progress tickets
 const STALE_CLAIM_HOURS = 48;     // unverified preorder claims released after 48h
+const ESCALATION_MINUTES = 10;    // ping again if unclaimed after 10 min
+const escalatedTickets = new Set(); // track already-escalated request IDs
 
 export function startTicketAutoClose(client) {
   clientRef = client;
@@ -28,6 +32,7 @@ export function startTicketAutoClose(client) {
     runCheck(verifyDeadlineMinutes).catch((err) => log('Check failed:', err?.message));
     runStaleCheck().catch((err) => log('Stale check failed:', err?.message));
     runStaleClaimCheck().catch((err) => log('Stale claim check failed:', err?.message));
+    runEscalationCheck().catch((err) => log('Escalation check failed:', err?.message));
   }, checkIntervalMs);
   runCheck(verifyDeadlineMinutes).catch((err) => {
     log('First run check failed:', err?.message);
@@ -53,10 +58,28 @@ async function runCheck(deadlineMinutes = ticketConfig.verifyDeadlineMinutes) {
       );
     }
     cancelRequest(req.id);
-    setCooldown(req.buyer_id, req.game_app_id);
+    // No cooldown — ticket closed before any code was generated
     clearState(req.ticket_channel_id);
-    const cooldownH = getCooldownHours(req.game_app_id);
-    const msg = `⏱️ <@${req.buyer_id}> Your **${req.game_name}** ticket was closed: screenshot was not verified within ${deadlineMinutes} minutes. You can request this game again in **${cooldownH} hours**.`;
+
+    // Issue warning on every auto-close for unverified screenshot
+    let warnText = '';
+    try {
+      const result = addWarning(
+        req.buyer_id,
+        `Ticket auto-closed: screenshot not verified within ${deadlineMinutes} minutes (${req.game_name})`,
+        clientRef.user.id
+      );
+      log(`Warning issued to ${req.buyer_id} (${result.totalWarnings}/3)${result.autoBlacklisted ? ' — AUTO-BLACKLISTED' : ''}`);
+      if (result.autoBlacklisted) {
+        warnText = `\n⛔ You have been **auto-blacklisted** (${result.totalWarnings}/3 warnings) due to repeated inactivity.`;
+      } else {
+        warnText = `\n⚠️ **Warning issued** (${result.totalWarnings}/3). At 3 warnings you will be blacklisted.`;
+      }
+    } catch (e) {
+      log('Auto-warn failed:', e?.message);
+    }
+
+    const msg = `⏱️ <@${req.buyer_id}> Your **${req.game_name}** ticket was auto-closed: screenshot was not verified within **${deadlineMinutes} minutes**.${warnText}`;
     const channel = await clientRef.channels.fetch(req.ticket_channel_id).catch((err) => {
       log('Fetch ticket channel failed:', req.ticket_channel_id, err?.message);
       return null;
@@ -75,6 +98,7 @@ async function runCheck(deadlineMinutes = ticketConfig.verifyDeadlineMinutes) {
     } catch (e) {
       log('DM buyer error:', e?.message);
     }
+    // Delete the ticket channel
     if (channel?.deletable) {
       await channel.delete().catch((err) => {
         log('Delete ticket channel failed:', req.ticket_channel_id, err?.message);
@@ -86,44 +110,6 @@ async function runCheck(deadlineMinutes = ticketConfig.verifyDeadlineMinutes) {
       gameName: req.game_name,
       gameAppId: req.game_app_id,
     });
-
-    // Only auto-warn on repeat offenses — check how many tickets this user
-    // has had auto-closed in the last 7 days before issuing a warning
-    try {
-      const recentAutoCloses = db.prepare(`
-        SELECT COUNT(*) AS n FROM requests
-        WHERE buyer_id = ? AND status = 'cancelled'
-          AND datetime(created_at) > datetime('now', '-7 days')
-          AND (screenshot_verified IS NULL OR screenshot_verified = 0)
-      `).get(req.buyer_id)?.n ?? 0;
-
-      if (recentAutoCloses >= 2) {
-        // 2+ auto-closes in 7 days → issue a warning
-        const result = addWarning(
-          req.buyer_id,
-          `Ticket auto-closed: screenshot not verified within ${deadlineMinutes} minutes (${req.game_name}) — repeat offense`,
-          clientRef.user.id
-        );
-        log(`Warning issued to ${req.buyer_id} (${result.totalWarnings}/3)${result.autoBlacklisted ? ' — AUTO-BLACKLISTED' : ''}`);
-        const user = await clientRef.users.fetch(req.buyer_id).catch(() => null);
-        if (user) {
-          const warnMsg = result.autoBlacklisted
-            ? `⛔ You have been **auto-blacklisted** (${result.totalWarnings}/3 warnings). Your ticket for **${req.game_name}** was closed due to repeated inactivity.`
-            : `⚠️ You received a **warning** (${result.totalWarnings}/3) because your ticket for **${req.game_name}** was auto-closed due to repeated inactivity. At 3 warnings you will be blacklisted.`;
-          await user.send(warnMsg).catch(() => {});
-        }
-      } else {
-        // First offense — just DM a notice (no warning)
-        const user = await clientRef.users.fetch(req.buyer_id).catch(() => null);
-        if (user) {
-          await user.send(
-            `ℹ️ Your ticket for **${req.game_name}** was auto-closed because the screenshot wasn't verified in time. This is just a notice — no warning issued. Repeated auto-closes will result in warnings.`
-          ).catch(() => {});
-        }
-      }
-    } catch (e) {
-      log('Auto-warn failed:', e?.message);
-    }
   }
 }
 
@@ -298,5 +284,52 @@ async function runStaleClaimCheck() {
         ],
       }).catch(() => {});
     } catch {}
+  }
+}
+
+/**
+ * Escalation: if a ticket has been pending (unclaimed) for ESCALATION_MINUTES,
+ * ping all available activators again + the activator role as a reminder.
+ */
+async function runEscalationCheck() {
+  if (!clientRef) return;
+  const unclaimed = getUnclaimedPendingOlderThan(ESCALATION_MINUTES);
+  for (const req of unclaimed) {
+    if (escalatedTickets.has(req.id)) continue;
+    if (!req.ticket_channel_id) continue;
+    escalatedTickets.add(req.id);
+
+    const channel = await clientRef.channels.fetch(req.ticket_channel_id).catch(() => null);
+    if (!channel?.send) continue;
+
+    const activators = getActivatorsForGame(req.game_app_id);
+    const available = activators.filter((a) => !isAway(a.activator_id));
+    const mentions = available.map((a) => `<@${a.activator_id}>`).join(' ');
+    const rolePing = config.activatorRoleId ? `<@&${config.activatorRoleId}>` : '';
+
+    const elapsed = Math.round((Date.now() - new Date(req.created_at).getTime()) / 60000);
+
+    await channel.send({
+      content: [
+        `⚠️ **Escalation** — This ticket has been unclaimed for **${elapsed} minutes**.`,
+        '',
+        mentions || rolePing || '*(no activators available)*',
+        rolePing && mentions ? rolePing : '',
+        '',
+        `Please claim this request or it will be auto-closed.`,
+      ].filter(Boolean).join('\n'),
+      allowedMentions: {
+        users: available.map((a) => a.activator_id),
+        roles: config.activatorRoleId ? [config.activatorRoleId] : [],
+      },
+    }).catch((err) => log('Escalation ping failed:', err?.message));
+
+    log(`Escalated ticket ${req.id} (${req.game_name}) after ${elapsed} min`);
+  }
+
+  // Clean up escalated set for tickets that are no longer pending
+  for (const id of escalatedTickets) {
+    const still = db.prepare("SELECT id FROM requests WHERE id = ? AND status = 'pending'").get(id);
+    if (!still) escalatedTickets.delete(id);
   }
 }

@@ -1,4 +1,4 @@
-import { loadGames } from '../utils/games.js';
+import { loadGames, getGameByAppId } from '../utils/games.js';
 import { getActivatorsForGame, getAvailableStockForGame } from './activators.js';
 import { db } from '../db/index.js';
 
@@ -108,10 +108,12 @@ export function getPerGameRestockDetails(limit = 10) {
     ORDER BY next_at ASC
     LIMIT ?
   `).all(limit);
-  return rows.map((r) => ({
-    gameAppId: r.game_app_id,
-    pending: r.pending,
-    nextAt: r.next_at,
-    dbGameName: r.db_game_name || null,
-  }));
+  return rows
+    .filter((r) => getGameByAppId(r.game_app_id))
+    .map((r) => ({
+      gameAppId: r.game_app_id,
+      pending: r.pending,
+      nextAt: r.next_at,
+      dbGameName: r.db_game_name || null,
+    }));
 }

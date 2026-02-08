@@ -480,6 +480,42 @@ export async function initDb() {
   }
   // Credential viewing consent column on activator_games
   try { sqlDb.exec('ALTER TABLE activator_games ADD COLUMN creds_viewable INTEGER DEFAULT 0'); } catch {}
+  // Migration: allow multiple Steam accounts per game per activator
+  // Change UNIQUE(activator_id, game_app_id) → UNIQUE(activator_id, game_app_id, steam_username)
+  try {
+    const hasOldConstraint = (() => {
+      const info = sqlDb.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='activator_games'");
+      if (!info.length || !info[0].values.length) return false;
+      const ddl = info[0].values[0][0] || '';
+      return ddl.includes('UNIQUE(activator_id, game_app_id)') && !ddl.includes('steam_username');
+    })();
+    if (hasOldConstraint) {
+      sqlDb.exec(`
+        CREATE TABLE IF NOT EXISTS activator_games_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          activator_id TEXT NOT NULL,
+          game_app_id INTEGER NOT NULL,
+          game_name TEXT NOT NULL,
+          method TEXT NOT NULL CHECK(method IN ('manual', 'automated')),
+          credentials_encrypted TEXT,
+          steam_username TEXT,
+          stock_quantity INTEGER DEFAULT 5,
+          creds_viewable INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now')),
+          UNIQUE(activator_id, game_app_id, steam_username)
+        );
+        INSERT INTO activator_games_new (id, activator_id, game_app_id, game_name, method, credentials_encrypted, steam_username, stock_quantity, creds_viewable, created_at)
+          SELECT id, activator_id, game_app_id, game_name, method, credentials_encrypted, steam_username, stock_quantity, COALESCE(creds_viewable, 0), created_at FROM activator_games;
+        DROP TABLE activator_games;
+        ALTER TABLE activator_games_new RENAME TO activator_games;
+        CREATE INDEX IF NOT EXISTS idx_activator_games_activator ON activator_games(activator_id);
+        CREATE INDEX IF NOT EXISTS idx_activator_games_game ON activator_games(game_app_id);
+      `);
+      console.log('[DB] Migration: activator_games UNIQUE constraint updated to allow multiple accounts per game');
+    }
+  } catch (e) {
+    console.error('[DB] Migration activator_games multi-account failed:', e?.message);
+  }
   // Shop item columns (priority boost, XP boost)
   try { sqlDb.exec('ALTER TABLE users ADD COLUMN priority_boost INTEGER DEFAULT 0'); } catch {}
   try { sqlDb.exec('ALTER TABLE users ADD COLUMN xp_boost_until TEXT'); } catch {}
@@ -492,6 +528,8 @@ export async function initDb() {
   try { sqlDb.exec('ALTER TABLE requests ADD COLUMN no_auto_close INTEGER DEFAULT 0'); } catch {}
   // Screenshot verified column
   try { sqlDb.exec('ALTER TABLE requests ADD COLUMN screenshot_verified INTEGER DEFAULT 0'); } catch {}
+  // Track if a skip token was used for this request (refund on cancel)
+  try { sqlDb.exec('ALTER TABLE requests ADD COLUMN used_skip_token INTEGER DEFAULT 0'); } catch {}
   // Daily reward claims
   try {
     sqlDb.exec(`

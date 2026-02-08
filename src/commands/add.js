@@ -56,10 +56,11 @@ export async function execute(interaction) {
     return interaction.reply({ content: 'Game not found.', flags: MessageFlags.Ephemeral });
   }
 
-  const existing = getActivatorGames(interaction.user.id).find((g) => g.game_app_id === appId);
-  if (existing) {
+  const existingEntries = getActivatorGames(interaction.user.id).filter((g) => g.game_app_id === appId);
+  const hasManual = existingEntries.some((g) => g.method === 'manual');
+  if (hasManual) {
     return interaction.reply({
-      content: `You already have **${game.name}** registered (${existing.method}). Use \`/remove\` first to change.`,
+      content: `You already have **${game.name}** registered as manual. Use \`/remove\` first to change.`,
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -170,6 +171,12 @@ export async function handleModal(interaction) {
     return true;
   }
 
+  // Check if this exact Steam account is already registered for this game
+  const existingAccounts = getActivatorGames(interaction.user.id).filter(
+    (g) => g.game_app_id === appId && g.method === 'automated'
+  );
+  const alreadyHasAccount = existingAccounts.some((g) => g.steam_username === username);
+
   const initialStock = 5;
   addActivatorGame(interaction.user.id, appId, game.name, 'automated', { username, password }, initialStock, consentGranted);
   logRestock({
@@ -177,9 +184,10 @@ export async function handleModal(interaction) {
     gameAppId: appId,
     gameName: game.name,
     quantity: initialStock,
-    method: 'manual',
+    method: 'automated',
   }).catch(() => {});
   const count = getStockCount(appId);
+  const totalAccounts = existingAccounts.length + (alreadyHasAccount ? 0 : 1);
 
   const twoFANote = testResult.requires2FA
     ? ' When generating a code, you\'ll be asked for the 5-digit confirmation code Steam sends to your email.'
@@ -187,8 +195,12 @@ export async function handleModal(interaction) {
   const consentNote = consentGranted
     ? ' Staff can view credentials if automation fails.'
     : ' Staff **cannot** view credentials (no consent).';
+  const accountNote = totalAccounts > 1
+    ? ` You now have **${totalAccounts}** automated accounts for this game.`
+    : '';
+  const updateNote = alreadyHasAccount ? ' (credentials updated)' : '';
   await interaction.editReply({
-    content: `✅ **Login test passed.** Added **${game.name}** with automated activation. **${count}** in stock. Credentials stored encrypted.${twoFANote}${consentNote}`,
+    content: `✅ **Login test passed.** ${alreadyHasAccount ? 'Updated' : 'Added'} **${game.name}** with automated activation${updateNote}. **${count}** in stock. Credentials stored encrypted.${twoFANote}${consentNote}${accountNote}`,
   });
   syncPanelMessage(interaction.client, buildPanelMessagePayload()).catch(() => {});
   notifyWaitlistAndClear(interaction.client, appId).catch(() => {});

@@ -1270,6 +1270,27 @@ async function aiAssistExtraction($, pageUrl, jar, appIdStr) {
   return findCodeInPage(current$);
 }
 
+/* ---------- code cache ---------- */
+
+const codeCache = new Map(); // key: `${username}:${appId}` → { code, timestamp }
+const CODE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCachedCode(username, appId) {
+  const key = `${username}:${appId}`;
+  const entry = codeCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CODE_CACHE_TTL) {
+    codeCache.delete(key);
+    return null;
+  }
+  log(`Cache hit for ${key}`);
+  return entry.code;
+}
+
+function setCachedCode(username, appId, code) {
+  codeCache.set(`${username}:${appId}`, { code, timestamp: Date.now() });
+}
+
 /* ---------- retry wrapper ---------- */
 
 const MAX_RETRIES = 2;
@@ -1360,6 +1381,13 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
   }
 
   const { gameAppId: appId, username, password } = validateInputs(gameAppId, credentials);
+
+  // 0. Check code cache first (fastest path)
+  if (!confirmCode) {
+    const cached = getCachedCode(username, appId);
+    if (cached) return cached;
+  }
+
   const saved = loadSession(username);
   let steamCookies = null;
 
@@ -1449,6 +1477,7 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
     saveSession(username, { ...freshSession, drmCookies: jar.toJSON() });
   }
 
+  setCachedCode(username, appId, code);
   log('Code extracted successfully');
   return code;
 }
@@ -1467,7 +1496,7 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
  * @returns {Promise<string>} The authorization code
  */
 export async function generateAuthCodeForRequest(gameAppId, confirmCode = null) {
-  const { getActivatorsForGame, getCredentials: getCredsFromDb } = await import('./activators.js');
+  const { getActivatorsForGame, getCredentials: getCredsFromDb, getDailyActivationCount } = await import('./activators.js');
 
   const appId = Number(gameAppId);
   if (!Number.isInteger(appId) || appId < 1) throw new Error('Invalid game App ID.');
@@ -1480,16 +1509,35 @@ export async function generateAuthCodeForRequest(gameAppId, confirmCode = null) 
     throw new Error('No automated Steam account found for this game. An activator must add it with `/add` first.');
   }
 
-  // Try each automated account until one succeeds
+  // Sort: prefer accounts with fewer daily activations (more headroom)
+  const today = new Date().toISOString().slice(0, 10);
+  const limit = (await import('../config.js')).config.dailyActivationLimit;
+  const sorted = [...automated].sort((a, b) => {
+    const aCount = getDailyActivationCount(a.steam_username || `manual_${a.activator_id}_${a.game_app_id}`, today);
+    const bCount = getDailyActivationCount(b.steam_username || `manual_${b.activator_id}_${b.game_app_id}`, today);
+    return aCount - bCount;
+  });
+
+  // Try each automated account until one succeeds, skipping accounts at daily limit
   let lastError = null;
-  for (const row of automated) {
+  let skippedAtLimit = 0;
+  for (const row of sorted) {
+    // Skip accounts that hit their daily limit
+    const steamId = row.steam_username || `manual_${row.activator_id}_${row.game_app_id}`;
+    const dailyCount = getDailyActivationCount(steamId, today);
+    if (dailyCount >= limit) {
+      log(`generateAuthCodeForRequest: skipping ${row.steam_username} — daily limit reached (${dailyCount}/${limit})`);
+      skippedAtLimit++;
+      continue;
+    }
+
     const credentials = getCredsFromDb(row.activator_id, appId);
     if (!credentials?.username || !credentials?.password) {
       log(`generateAuthCodeForRequest: skipping ${row.steam_username} — credentials missing or unreadable`);
       continue;
     }
 
-    log(`generateAuthCodeForRequest: trying account ${credentials.username} for app ${appId}`);
+    log(`generateAuthCodeForRequest: trying account ${credentials.username} for app ${appId} (${dailyCount}/${limit} today)`);
     try {
       const code = await generateAuthCode(appId, credentials, confirmCode);
       return code;
@@ -1500,6 +1548,10 @@ export async function generateAuthCodeForRequest(gameAppId, confirmCode = null) 
       if (err?.message?.includes('Confirmation code')) throw err;
       // Otherwise try next account
     }
+  }
+
+  if (skippedAtLimit === automated.length) {
+    throw new Error(`All ${automated.length} automated account(s) have reached their daily activation limit (${limit}/day). Try again tomorrow or add more accounts with \`/add\`.`);
   }
 
   throw lastError || new Error('All automated accounts failed to generate a code for this game.');

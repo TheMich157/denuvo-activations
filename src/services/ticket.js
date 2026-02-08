@@ -115,6 +115,11 @@ import {
 
     const requestId = createRequest(interaction.user.id, game.appId, game.name);
 
+    // Mark if skip token was used (for refund on cancel)
+    if (usedSkipToken) {
+      db.prepare('UPDATE requests SET used_skip_token = 1 WHERE id = ?').run(requestId);
+    }
+
     // Calculate queue position
     const queuePosition = db.prepare(`
       SELECT COUNT(*) AS n FROM requests WHERE status IN ('pending', 'in_progress') AND created_at <= (
