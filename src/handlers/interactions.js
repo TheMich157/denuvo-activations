@@ -17,7 +17,7 @@ import { assignIssuer, getRequest, getRequestByChannel, cancelRequest, markScree
 import { saveTranscript } from '../services/transcript.js';
 import { getCredentials } from '../services/activators.js';
 import { setState, clearState } from '../services/screenshotVerify/state.js';
-import { generateAuthCode } from '../services/drm.js';
+import { generateAuthCode, generateAuthCodeForRequest } from '../services/drm.js';
 import { completeAndNotifyTicket } from '../commands/done.js';
 import { handleSelect as panelHandleSelect, handleRefresh as panelHandleRefresh } from '../commands/panelHandler.js';
 import { handleSelect as addHandleSelect, handleModal as addHandleModal } from '../commands/add.js';
@@ -38,6 +38,7 @@ import {
 import { getGiveaway, hasEntered, enterGiveaway, getEntryCount } from '../services/giveaway.js';
 import { submitFeedback, hasFeedback } from '../services/feedback.js';
 import { handleBulkCodeModal } from '../commands/bulkcode.js';
+import { handleModal as bulkdoneHandleModal } from '../commands/bulkdone.js';
 import { getUserTierInfo, TIERS, getDiscountedPrice } from '../services/tiers.js';
 import { handleVerifyAnswer, handleVerifyRetry } from '../services/verification.js';
 import { handleAppealModal } from '../commands/appeal.js';
@@ -87,7 +88,15 @@ async function handleClaimRequest(interaction) {
       { id: req.issuer_id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
     ]);
   }
-  const hasAutomated = !!getCredentials(req.issuer_id, req.game_app_id);
+  // Check if this activator has credentials, OR if any automated account exists for this game
+  let hasAutomated = !!getCredentials(req.issuer_id, req.game_app_id);
+  if (!hasAutomated) {
+    try {
+      const { getActivatorsForGame } = await import('../services/activators.js');
+      const activators = getActivatorsForGame(req.game_app_id, true);
+      hasAutomated = activators.some(a => a.method === 'automated' && a.steam_username);
+    } catch {}
+  }
   const ticketRef = `#${req.id.slice(0, 8).toUpperCase()}`;
   const claimedEmbed = new EmbedBuilder()
     .setColor(0x57f287)
@@ -125,10 +134,6 @@ async function handleAutoCodeButton(interaction) {
     return true;
   }
   const credentials = getCredentials(req.issuer_id, req.game_app_id);
-  if (!credentials) {
-    await interaction.reply({ content: 'Automated credentials not found for this game. Use **Done** to enter the code manually.', flags: MessageFlags.Ephemeral });
-    return true;
-  }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -142,7 +147,10 @@ async function handleAutoCodeButton(interaction) {
   }
 
   try {
-    const code = await generateAuthCode(req.game_app_id, credentials, null);
+    // Use specific activator credentials if available, otherwise search DB for any automated account
+    const code = credentials
+      ? await generateAuthCode(req.game_app_id, credentials, null)
+      : await generateAuthCodeForRequest(req.game_app_id, null);
     const result = await completeAndNotifyTicket(req, code, interaction.client);
     if (result === 'screenshot_not_verified') {
       await interaction.editReply({
@@ -222,10 +230,6 @@ async function handleAutoCodeModal(interaction) {
     return true;
   }
   const credentials = getCredentials(req.issuer_id, req.game_app_id);
-  if (!credentials) {
-    await interaction.reply({ content: 'Automated credentials not available. Use **Done** and enter the code manually.', flags: MessageFlags.Ephemeral });
-    return true;
-  }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -239,7 +243,9 @@ async function handleAutoCodeModal(interaction) {
   }
 
   try {
-    const code = await generateAuthCode(req.game_app_id, credentials, twoFactorCode);
+    const code = credentials
+      ? await generateAuthCode(req.game_app_id, credentials, twoFactorCode)
+      : await generateAuthCodeForRequest(req.game_app_id, twoFactorCode);
     const result = await completeAndNotifyTicket(req, code, interaction.client);
     if (result === 'screenshot_not_verified') {
       await interaction.editReply({
@@ -771,6 +777,7 @@ export async function handle(interaction) {
     handleGiveawayEnter,
     handleFeedbackButton,
     handleBulkCodeModal,
+    bulkdoneHandleModal,
     handleAppealModal,
     doneHandleCopyButton,
     handleCodeWorkedButton,

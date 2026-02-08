@@ -14,8 +14,11 @@ if (!existsSync(sessionsDir)) {
 
 const log = debug('drm');
 
-const MIN_CODE_LENGTH = 10;
-const CODE_FALLBACK_REGEX = /[A-Za-z0-9_-]{20,}/;
+const MIN_CODE_LENGTH = 6;
+// The final auth code is exactly 6 alphanumeric characters (digits + letters)
+const AUTH_CODE_REGEX = /\b[A-Za-z0-9]{6}\b/;
+// Longer codes as secondary fallback
+const CODE_FALLBACK_REGEX = /[A-Za-z0-9_-]{6,}/;
 
 /* ---------- session helpers ---------- */
 
@@ -561,135 +564,550 @@ async function drmLogin(steamCookieStrings) {
   );
 }
 
-/**
- * Extract an auth code from drm.steam.run for a given game.
- */
-async function drmExtractCode(jar, gameAppId) {
-  const cheerio = await import('cheerio');
+/* ---------- page helpers ---------- */
 
-  log('drmExtractCode: loading main page');
-  const mainRes = await httpGet(drmConfig.baseUrl, jar);
-  let $ = cheerio.load(mainRes.body);
-
-  // Find game ID input
-  const gameInputSels = drmConfig.selectors.gameIdInput.split(',').map(s => s.trim());
-  let gameInput = null;
-  for (const sel of gameInputSels) {
-    const el = $(sel).first();
-    if (el.length) { gameInput = el; break; }
-  }
-
-  if (!gameInput) {
-    throw new Error('Could not find game ID input on drm.steam.run. The site may have changed.');
-  }
-
-  const inputName = gameInput.attr('name') || 'appid';
-  const form = gameInput.closest('form');
-
-  // Form-based submission
-  if (form.length) {
-    const action = new URL(form.attr('action') || '', drmConfig.baseUrl).href;
-    const method = (form.attr('method') || 'POST').toUpperCase();
-    const params = new URLSearchParams();
-    form.find('input, select, textarea').each(function () {
-      const n = $(this).attr('name');
-      if (!n) return;
-      if ($(this).attr('type') === 'submit') return;
-      params.set(n, $(this).val() || '');
-    });
-    params.set(inputName, String(gameAppId));
-
-    log('drmExtractCode: submitting game ID via form →', action);
-    const res = method === 'GET'
-      ? await httpGet(`${action}?${params}`, jar)
-      : await httpPost(action, params, jar);
-    $ = cheerio.load(res.body);
-
-    const code = findCodeInPage($);
-    if (code) return code;
-
-    const seqCode = await trySequentialSubmits($, jar, drmConfig.baseUrl);
-    if (seqCode) return seqCode;
-  }
-
-  // Fallback: direct POST
-  log('drmExtractCode: no form found, trying direct POST');
-  const directRes = await httpPost(drmConfig.baseUrl, { [inputName]: String(gameAppId) }, jar);
-  $ = cheerio.load(directRes.body);
-
-  let code = findCodeInPage($);
-  if (code) return code;
-
-  const seqCode = await trySequentialSubmits($, jar, drmConfig.baseUrl);
-  if (seqCode) return seqCode;
-
-  // Try common API patterns
-  for (const apiPath of ['/api/extract', '/extract', '/api/generate', '/generate']) {
-    try {
-      const apiUrl = new URL(apiPath, drmConfig.baseUrl).href;
-      const apiRes = await httpPost(apiUrl, { appid: String(gameAppId), gameid: String(gameAppId) }, jar);
-      try {
-        const json = JSON.parse(apiRes.body);
-        const val = json.code || json.auth_code || json.token || json.result;
-        if (typeof val === 'string' && val.length >= MIN_CODE_LENGTH) return val;
-      } catch {}
-      const $api = cheerio.load(apiRes.body);
-      code = findCodeInPage($api);
-      if (code) return code;
-    } catch {}
-  }
-
-  throw new Error('Could not extract authorization code. The site may have changed. Use **Done** to paste the code from drm.steam.run manually.');
-}
-
-async function trySequentialSubmits($, jar, baseUrl) {
-  const cheerio = await import('cheerio');
-  const buttonTexts = [
-    ['Extract', '提取'],
-    ['Fill', '填充', 'Fill Info'],
-    ['Submit', '提交', 'Generate'],
-  ];
-
-  for (const texts of buttonTexts) {
-    for (const text of texts) {
-      const btn = $('button, input[type="submit"]').filter(function () {
-        const t = $(this).text().trim();
-        const v = $(this).val() || '';
-        return t.includes(text) || v.includes(text);
-      }).first();
-
-      if (!btn.length) continue;
-
-      const form = btn.closest('form');
-      if (!form.length) continue;
-
-      const { action, params } = serializeForm($, form, baseUrl);
-      const btnName = btn.attr('name');
-      if (btnName) params.set(btnName, btn.val() || text);
-
-      log(`drmExtractCode: submitting "${text}" form →`, action);
-      const res = await httpPost(action, params, jar);
-      $ = cheerio.load(res.body);
-
-      const code = findCodeInPage($);
-      if (code) return code;
-      break;
-    }
+/** Find a clickable element (button / submit / link) whose visible text matches any of `texts`. */
+function findClickable($, texts) {
+  const SELS = 'button, input[type="submit"], a.btn, a.button, [role="button"], a';
+  for (const text of texts) {
+    const lower = text.toLowerCase();
+    const el = $(SELS).filter(function () {
+      const t = ($(this).text() || '').trim().toLowerCase();
+      const v = ($(this).val() || '').toLowerCase();
+      return t.includes(lower) || v.includes(lower);
+    }).first();
+    if (el.length) return el;
   }
   return null;
 }
 
-function findCodeInPage($) {
-  const codeSels = drmConfig.selectors.codeOutput.split(',').map(s => s.trim());
-  for (const sel of codeSels) {
+/** Find a game/app ID input on the current page. */
+function findGameIdInput($) {
+  for (const sel of drmConfig.selectors.gameIdInput.split(',').map(s => s.trim())) {
     const el = $(sel).first();
-    if (!el.length) continue;
-    const val = (el.val() || el.text() || '').trim();
-    if (val.length >= MIN_CODE_LENGTH) return val;
+    if (el.length) return el;
   }
+  const fb = $('input[type="text"], input[type="number"], input:not([type])').filter(function () {
+    const blob = (($(this).attr('name') || '') + ($(this).attr('id') || '') + ($(this).attr('placeholder') || '')).toLowerCase();
+    return /app|game|id/.test(blob);
+  }).first();
+  return fb.length ? fb : null;
+}
+
+/** Click a clickable element — submit its form or follow its link. Returns { $, url } or null. */
+async function clickEl($, el, jar, pageUrl, overrides = {}) {
+  const cheerio = await import('cheerio');
+  const form = el.closest('form');
+  if (form.length) {
+    const { action, params } = serializeForm($, form, pageUrl);
+    const name = el.attr('name');
+    if (name) params.set(name, el.val() || el.text().trim());
+    for (const [k, v] of Object.entries(overrides)) params.set(k, v);
+    const method = (form.attr('method') || 'POST').toUpperCase();
+    log('clickEl: submit form →', action, '| method:', method);
+    const res = method === 'GET'
+      ? await httpGet(`${action}?${params}`, jar)
+      : await httpPost(action, params, jar);
+    return { $: cheerio.load(res.body), url: res.url, body: res.body };
+  }
+  const href = el.attr('href');
+  if (href && href !== '#' && !href.startsWith('javascript:')) {
+    const full = new URL(href, pageUrl).href;
+    log('clickEl: follow link →', full);
+    const res = await httpGet(full, jar);
+    return { $: cheerio.load(res.body), url: res.url, body: res.body };
+  }
+  const onclick = el.attr('onclick') || el.attr('data-href') || '';
+  const m = onclick.match(/['"]([^'"]*(?:\.php|\/)[^'"]*)['"]/);
+  if (m) {
+    const full = new URL(m[1], pageUrl).href;
+    log('clickEl: onclick →', full);
+    const res = await httpGet(full, jar);
+    return { $: cheerio.load(res.body), url: res.url, body: res.body };
+  }
+  return null;
+}
+
+/**
+ * Search the page for the final 6-character alphanumeric authorization code.
+ * Checks config selectors, data attributes, and regex patterns.
+ */
+function findCodeInPage($) {
+  // 1. Explicit selectors from config
+  for (const sel of drmConfig.selectors.codeOutput.split(',').map(s => s.trim())) {
+    try {
+      const el = $(sel).first();
+      if (!el.length) continue;
+      const val = (el.val() || el.text() || '').trim();
+      if (val.length >= MIN_CODE_LENGTH && !/[<{]/.test(val)) return val;
+    } catch {}
+  }
+  // 2. Data attributes
+  let found = null;
+  $('[data-code], [data-auth], [data-token], [data-result]').each(function () {
+    if (found) return;
+    const v = ($(this).attr('data-code') || $(this).attr('data-auth') || $(this).attr('data-token') || $(this).attr('data-result') || '').trim();
+    if (v.length >= MIN_CODE_LENGTH) found = v;
+  });
+  if (found) return found;
+  // 3. Look for a standalone 6-char alphanumeric code (the final auth code)
   const bodyText = $('body').text() || '';
-  const match = bodyText.match(CODE_FALLBACK_REGEX);
-  return match ? match[0] : null;
+  const m6 = bodyText.match(AUTH_CODE_REGEX);
+  if (m6) return m6[0];
+  // 4. Longer fallback
+  const mLong = bodyText.match(CODE_FALLBACK_REGEX);
+  return mLong ? mLong[0] : null;
+}
+
+/**
+ * Extract extracted data (GameId, SteamId, BillData) from the extraction results page.
+ * Returns an object with all key-value pairs found, or null.
+ */
+function extractExtractionData($) {
+  const data = {};
+  // Look for labeled values: "GameId: xxx", "SteamId: xxx", "BillData: xxx" etc.
+  const text = $('body').text() || '';
+  const patterns = [
+    /Game\s*Id\s*[:\s]\s*(\S+)/i,
+    /Steam\s*Id\s*[:\s]\s*(\S+)/i,
+    /Bill\s*Data\s*[:\s]\s*(\S+)/i,
+    /App\s*Id\s*[:\s]\s*(\S+)/i,
+  ];
+  const keys = ['GameId', 'SteamId', 'BillData', 'AppId'];
+  for (let i = 0; i < patterns.length; i++) {
+    const m = text.match(patterns[i]);
+    if (m) data[keys[i]] = m[1];
+  }
+
+  // Also scrape from table rows, definition lists, or labeled spans
+  $('tr, dl, .row, .field, .info-row, .data-row').each(function () {
+    const t = ($(this).text() || '').trim();
+    for (let i = 0; i < patterns.length; i++) {
+      const m = t.match(patterns[i]);
+      if (m && !data[keys[i]]) data[keys[i]] = m[1];
+    }
+  });
+
+  // Scrape from input fields that are pre-filled (readonly or with values)
+  $('input[value], textarea').each(function () {
+    const name = ($(this).attr('name') || $(this).attr('id') || '').toLowerCase();
+    const val = ($(this).val() || '').trim();
+    if (!val) return;
+    if (name.includes('game') || name.includes('appid')) data.GameId = data.GameId || val;
+    if (name.includes('steam')) data.SteamId = data.SteamId || val;
+    if (name.includes('bill')) data.BillData = data.BillData || val;
+  });
+
+  return Object.keys(data).length > 0 ? data : null;
+}
+
+/* ---------- exact drm.steam.run multi-step code extraction ---------- */
+
+/**
+ * Extract an auth code from drm.steam.run for a given game.
+ *
+ * Exact site flow (as described by the user):
+ *   1. Login to drm.steam.run (already done before this function is called)
+ *   2. Click "Authorization Code Generation" button/link on the dashboard
+ *   3. Click "Extract Authorization" button/link
+ *   4. A window/form appears with a Game ID input — enter the AppId
+ *   5. Click "Start Extraction" button
+ *   6. Results show: GameId, SteamId, BillData strings
+ *   7. Fill out the Authorization Code Generation form with the extracted data
+ *      (use the "Fill Info" button if available, otherwise fill manually)
+ *   8. Click "Submit the Authorization and Generate the Authorization Code"
+ *   9. A 6-character alphanumeric code appears — that's the final code
+ *
+ * Each step logs exactly what it sees so failures are debuggable.
+ */
+async function drmExtractCode(jar, gameAppId) {
+  const cheerio = await import('cheerio');
+  const appIdStr = String(gameAppId);
+
+  // ── Step 1: Load dashboard (post-login) ──
+  log('step1: loading dashboard', drmConfig.baseUrl);
+  let page = await httpGet(drmConfig.baseUrl, jar);
+  let $ = cheerio.load(page.body);
+  let url = page.url;
+  log('step1: title:', $('title').text().trim(), '| url:', url);
+
+  // ── Step 2: Click "Authorization Code Generation" ──
+  log('step2: looking for "Authorization Code Generation" link/button');
+  let btn = findClickable($, [
+    'Authorization Code Generation', 'Authorization Code', 'Code Generation',
+    'Auth Code', 'Generate Code', 'Generate Authorization',
+    '授权码生成', '生成授权码', '授权码', '生成',
+  ]);
+  if (btn) {
+    log('step2: found, clicking');
+    const res = await clickEl($, btn, jar, url);
+    if (res) { $ = res.$; url = res.url; }
+  } else {
+    // Fallback: try known paths
+    log('step2: button not found, trying known paths');
+    for (const path of (drmConfig.knownPaths || [])) {
+      try {
+        const tryUrl = new URL(path, drmConfig.baseUrl).href;
+        const res = await httpGet(tryUrl, jar);
+        if (res.status < 400) {
+          $ = cheerio.load(res.body);
+          url = res.url;
+          // Check if this page has the next step
+          if (findClickable($, ['Extract', '提取']) || findGameIdInput($)) {
+            log('step2: found relevant page at', tryUrl);
+            break;
+          }
+        }
+      } catch {}
+    }
+  }
+  log('step2: now on:', url, '| title:', $('title').text().trim());
+
+  // ── Step 3: Click "Extract Authorization" ──
+  log('step3: looking for "Extract Authorization" link/button');
+  btn = findClickable($, [
+    'Extract Authorization', 'Extract Authorizations', 'Extract Auth',
+    'Extract', '提取授权', '提取', 'Extraction',
+  ]);
+  if (btn) {
+    log('step3: found, clicking');
+    const res = await clickEl($, btn, jar, url);
+    if (res) { $ = res.$; url = res.url; }
+  } else {
+    log('step3: not found — may already be on the extraction page');
+  }
+  log('step3: now on:', url);
+
+  // ── Step 4: Find Game ID input and enter the AppId ──
+  log('step4: looking for Game ID input');
+  let gameInput = findGameIdInput($);
+  if (!gameInput) {
+    // The input might appear after clicking a tab or expanding a section
+    log('step4: no input found, scanning all links on page');
+    const allLinks = $('a[href]').toArray();
+    for (const linkEl of allLinks.slice(0, 10)) {
+      const href = $(linkEl).attr('href');
+      const text = ($(linkEl).text() || '').toLowerCase();
+      if (!href || href === '#') continue;
+      if (text.includes('extract') || text.includes('game') || text.includes('提取') || text.includes('appid')) {
+        try {
+          const linkUrl = new URL(href, url).href;
+          log('step4: trying link:', text, '→', linkUrl);
+          const res = await httpGet(linkUrl, jar);
+          if (res.status < 400) {
+            $ = cheerio.load(res.body);
+            url = res.url;
+            gameInput = findGameIdInput($);
+            if (gameInput) { log('step4: found input after following link'); break; }
+          }
+        } catch {}
+      }
+    }
+  }
+
+  if (!gameInput) {
+    log('step4: FAILED — page text:', snippet($('body').text(), 500));
+    throw new Error('Could not find Game ID input on drm.steam.run. Use **Done** to paste the code manually.');
+  }
+
+  const inputName = gameInput.attr('name') || 'appid';
+  log('step4: filling', inputName, '=', appIdStr);
+
+  // ── Step 5: Click "Start Extraction" ──
+  log('step5: submitting Game ID and clicking Start Extraction');
+  const form = gameInput.closest('form');
+  if (form.length) {
+    const { action, params } = serializeForm($, form, url);
+    params.set(inputName, appIdStr);
+    // Look for "Start Extraction" submit button
+    const startBtn = form.find('button, input[type="submit"]').filter(function () {
+      const t = ($(this).text() || $(this).val() || '').toLowerCase();
+      return t.includes('start') || t.includes('extract') || t.includes('search') ||
+             t.includes('开始') || t.includes('提取') || t.includes('搜索') || t.includes('submit');
+    }).first();
+    if (startBtn.length && startBtn.attr('name')) {
+      params.set(startBtn.attr('name'), startBtn.val() || startBtn.text().trim());
+    }
+    const method = (form.attr('method') || 'POST').toUpperCase();
+    log('step5: submitting form →', action);
+    const res = method === 'GET'
+      ? await httpGet(`${action}?${params}`, jar)
+      : await httpPost(action, params, jar);
+    $ = cheerio.load(res.body);
+    url = res.url;
+  } else {
+    // No form — try clicking a "Start Extraction" button separately
+    const startBtn = findClickable($, [
+      'Start Extraction', 'Start', 'Extract', '开始提取', '开始', '提取',
+    ]);
+    if (startBtn) {
+      const res = await clickEl($, startBtn, jar, url, { [inputName]: appIdStr });
+      if (res) { $ = res.$; url = res.url; }
+    } else {
+      // Direct POST with the app ID
+      log('step5: no form or button, direct POST');
+      const res = await httpPost(url, { [inputName]: appIdStr }, jar);
+      $ = cheerio.load(res.body);
+      url = res.url;
+    }
+  }
+
+  // Check if code appeared already (short flow)
+  let code = findCodeInPage($);
+  if (code) { log('step5: code found immediately after extraction'); return code; }
+
+  // ── Step 6: Read extracted data (GameId, SteamId, BillData) ──
+  log('step6: reading extracted data from results');
+  const extractedData = extractExtractionData($);
+  if (extractedData) {
+    log('step6: extracted data:', JSON.stringify(extractedData));
+  } else {
+    log('step6: no structured data found, will rely on Fill Info button');
+  }
+
+  // ── Step 7: Fill out the Authorization Code Generation form ──
+  // First try the "Fill Info" button which auto-populates the form
+  log('step7: looking for Fill Info button');
+  const fillBtn = findClickable($, [
+    'Fill Info', 'Fill', 'Fill Out', 'Auto Fill', 'Autofill',
+    '填充信息', '填充', '填写', '自动填充', '自动填写', '自动',
+  ]);
+  if (fillBtn) {
+    log('step7: found Fill Info button, clicking');
+    const res = await clickEl($, fillBtn, jar, url, extractedData || {});
+    if (res) { $ = res.$; url = res.url; }
+    code = findCodeInPage($);
+    if (code) { log('step7: code found after fill'); return code; }
+  } else if (extractedData) {
+    // Manually fill form fields with extracted data
+    log('step7: no Fill button, trying to fill form fields manually');
+    const genForm = $('form').filter(function () {
+      const t = ($(this).text() || '').toLowerCase();
+      return t.includes('authorization') || t.includes('generate') || t.includes('submit') ||
+             t.includes('授权') || t.includes('生成') || t.includes('提交');
+    }).first();
+    if (genForm.length) {
+      const { action, params } = serializeForm($, genForm, url);
+      // Fill in extracted data into matching fields
+      for (const [key] of params) {
+        const lower = key.toLowerCase();
+        if ((lower.includes('game') || lower.includes('app')) && extractedData.GameId) params.set(key, extractedData.GameId);
+        if (lower.includes('steam') && extractedData.SteamId) params.set(key, extractedData.SteamId);
+        if (lower.includes('bill') && extractedData.BillData) params.set(key, extractedData.BillData);
+      }
+      log('step7: submitting filled form →', action);
+      const res = await httpPost(action, params, jar);
+      $ = cheerio.load(res.body);
+      url = res.url;
+      code = findCodeInPage($);
+      if (code) { log('step7: code found after manual fill'); return code; }
+    }
+  } else {
+    log('step7: no Fill button and no extracted data');
+  }
+
+  // ── Step 8: Click "Submit the Authorization and Generate the Authorization Code" ──
+  log('step8: looking for Submit/Generate button');
+  const submitBtn = findClickable($, [
+    'Submit the Authorization and Generate', 'Submit the Authorization',
+    'Generate the Authorization Code', 'Generate Authorization Code',
+    'Submit Authorization', 'Generate Code',
+    'Submit', 'Generate', 'Authorize',
+    '提交授权', '生成授权码', '提交', '生成', '授权',
+    'Confirm', '确认', 'OK', '确定',
+  ]);
+  if (submitBtn) {
+    log('step8: found, clicking');
+    const res = await clickEl($, submitBtn, jar, url);
+    if (res) { $ = res.$; url = res.url; }
+    code = findCodeInPage($);
+    if (code) { log('step8: code found — SUCCESS'); return code; }
+  } else {
+    log('step8: no Submit button found, trying all forms');
+    // Try submitting every form on the page
+    for (const formEl of $('form').toArray()) {
+      const f = $(formEl);
+      const { action, params } = serializeForm($, f, url);
+      for (const [key] of params) {
+        if (/app|game|id/i.test(key)) params.set(key, appIdStr);
+      }
+      try {
+        const res = await httpPost(action, params, jar);
+        const $r = cheerio.load(res.body);
+        code = findCodeInPage($r);
+        if (code) { log('step8: code found via form brute-force'); return code; }
+      } catch {}
+    }
+  }
+
+  // ── Step 9: API fallback ──
+  log('step9: trying API endpoints');
+  for (const path of ['/api/extract', '/api/generate', '/api/authorize', '/api/token']) {
+    try {
+      const apiUrl = new URL(path, drmConfig.baseUrl).href;
+      const res = await httpPost(apiUrl, { appid: appIdStr, app_id: appIdStr, gameid: appIdStr }, jar);
+      try {
+        const j = JSON.parse(res.body);
+        const v = j.code || j.auth_code || j.token || j.result || j.authorization_code || j.data?.code;
+        if (typeof v === 'string' && v.length >= MIN_CODE_LENGTH) { log('step9: code from API', path); return v; }
+      } catch {}
+      code = findCodeInPage(cheerio.load(res.body));
+      if (code) return code;
+    } catch {}
+  }
+
+  // ── Step 10: AI-assisted fallback ──
+  if (process.env.GROQ_API_KEY) {
+    log('step10: trying AI-assisted extraction');
+    try {
+      const aiResult = await aiAssistExtraction($, url, jar, appIdStr);
+      if (aiResult) { log('step10: AI found code'); return aiResult; }
+    } catch (e) {
+      log('step10: AI error:', e?.message);
+    }
+  }
+
+  log('FAILED — page text:', snippet($('body').text(), 500));
+  throw new Error('Could not extract authorization code. The site may have changed. Use **Done** to paste the code from drm.steam.run manually.');
+}
+
+/**
+ * AI-assisted extraction: sends the page structure to Groq LLM to identify
+ * the auth code or determine the next action to take.
+ */
+async function aiAssistExtraction($, pageUrl, jar, appIdStr) {
+  const cheerio = await import('cheerio');
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return null;
+
+  const pageText = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 2000);
+  const forms = [];
+  $('form').each(function (i) {
+    const action = $(this).attr('action') || '';
+    const method = $(this).attr('method') || 'POST';
+    const inputs = [];
+    $(this).find('input, select, textarea, button').each(function () {
+      const tag = this.tagName;
+      const name = $(this).attr('name') || '';
+      const type = $(this).attr('type') || '';
+      const value = ($(this).val() || '').slice(0, 50);
+      const text = ($(this).text() || '').trim().slice(0, 50);
+      inputs.push(`<${tag} name="${name}" type="${type}" value="${value}"${text ? ` text="${text}"` : ''}>`);
+    });
+    forms.push(`Form[${i}] action="${action}" method="${method}":\n  ${inputs.join('\n  ')}`);
+  });
+  const links = [];
+  $('a[href]').each(function () {
+    const href = $(this).attr('href') || '';
+    const text = ($(this).text() || '').trim().slice(0, 60);
+    if (href && href !== '#' && text) links.push(`[${text}](${href})`);
+  });
+
+  const prompt = `You are analyzing drm.steam.run, a Steam DRM authorization code generation site.
+Goal: generate a 6-character alphanumeric authorization code for Steam App ID ${appIdStr}.
+
+The site flow is: Login → Authorization Code Generation → Extract Authorization → Input Game ID → Start Extraction → Read GameId/SteamId/BillData → Fill form → Submit → Get 6-char code.
+
+Current page URL: ${pageUrl}
+Page text: ${pageText}
+
+Forms: ${forms.join('\n\n') || '(none)'}
+Links: ${links.slice(0, 15).join('\n') || '(none)'}
+
+What should we do? Respond with EXACTLY one of:
+- CODE: <6_char_code> (if the code is visible)
+- SUBMIT_FORM: <0-based_index> (if a form needs submitting)
+- FOLLOW_LINK: <href> (if we need to navigate)
+- CLICK_BUTTON: <exact_button_text> (if we need to click something)
+- UNKNOWN (if you can't determine)`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: process.env.GROQ_MODEL?.trim() || 'meta-llama/llama-4-scout-17b-16e-instruct',
+        max_tokens: 200,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!res.ok) { log('AI: Groq error', res.status); return null; }
+    const data = await res.json();
+    const answer = (data.choices?.[0]?.message?.content || '').trim();
+    log('AI answer:', answer);
+
+    if (answer.startsWith('CODE:')) {
+      const code = answer.slice(5).trim();
+      if (code.length >= MIN_CODE_LENGTH) return code;
+    }
+    if (answer.startsWith('SUBMIT_FORM:')) {
+      const idx = parseInt(answer.slice(12).trim(), 10);
+      const formEls = $('form').toArray();
+      if (formEls[idx]) {
+        const f = $(formEls[idx]);
+        const { action, params } = serializeForm($, f, pageUrl);
+        for (const [key] of params) { if (/app|game|id/i.test(key)) params.set(key, appIdStr); }
+        const fRes = await httpPost(action, params, jar);
+        return findCodeInPage(cheerio.load(fRes.body));
+      }
+    }
+    if (answer.startsWith('FOLLOW_LINK:')) {
+      const href = answer.slice(12).trim();
+      try {
+        const linkRes = await httpGet(new URL(href, pageUrl).href, jar);
+        return findCodeInPage(cheerio.load(linkRes.body));
+      } catch {}
+    }
+    if (answer.startsWith('CLICK_BUTTON:')) {
+      const btnText = answer.slice(13).trim();
+      const b = findClickable($, [btnText]);
+      if (b) {
+        const r = await clickEl($, b, jar, pageUrl, { appid: appIdStr });
+        if (r) return findCodeInPage(r.$);
+      }
+    }
+  } catch (e) {
+    log('AI request error:', e?.message);
+  } finally {
+    clearTimeout(timeout);
+  }
+  return null;
+}
+
+/* ---------- retry wrapper ---------- */
+
+const MAX_RETRIES = 2;
+const RETRY_DELAYS = [3000, 8000]; // exponential-ish backoff
+
+/**
+ * Wrap drmExtractCode with retry logic for transient failures
+ * (network timeouts, rate limits, temporary server errors).
+ */
+async function drmExtractCodeWithRetry(jar, gameAppId) {
+  let lastErr;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await drmExtractCode(jar, gameAppId);
+    } catch (err) {
+      lastErr = err;
+      const msg = (err?.message || '').toLowerCase();
+      // Only retry on transient errors, not on permanent failures
+      const isTransient = msg.includes('timeout') || msg.includes('timed out') ||
+        msg.includes('rate limit') || msg.includes('429') ||
+        msg.includes('econnreset') || msg.includes('econnrefused') ||
+        msg.includes('socket hang up') || msg.includes('network') ||
+        msg.includes('fetch failed');
+      if (!isTransient || attempt >= MAX_RETRIES) break;
+      const delay = RETRY_DELAYS[attempt] || 5000;
+      log(`drmExtractCode: attempt ${attempt + 1} failed (${err?.message}), retrying in ${delay}ms…`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
 }
 
 /* ---------- public API ---------- */
@@ -768,7 +1186,7 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
       }
       if (!needsLogin) {
         log('generateAuthCode: saved drm cookies still valid');
-        const code = await drmExtractCode(jar, appId);
+        const code = await drmExtractCodeWithRetry(jar, appId);
         if (code && code.length >= MIN_CODE_LENGTH) {
           saveSession(username, { ...saved, drmCookies: jar.toJSON() });
           log('Code extracted successfully');
@@ -818,7 +1236,7 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
   }
 
   // 5. Extract the code
-  const code = await drmExtractCode(jar, appId);
+  const code = await drmExtractCodeWithRetry(jar, appId);
   if (!code || code.length < MIN_CODE_LENGTH) {
     throw new Error('Could not extract authorization code. The site may have changed. Use **Done** to paste the code from drm.steam.run manually.');
   }
@@ -830,4 +1248,56 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
 
   log('Code extracted successfully');
   return code;
+}
+
+/**
+ * Auto-find a Steam account in the database that owns a given game,
+ * then generate the auth code using that account's credentials.
+ *
+ * This is the main entry point for normal user requests — the bot
+ * searches its own DB for any activator account that has the game
+ * registered with method='automated', decrypts the credentials,
+ * and runs the full flow.
+ *
+ * @param {number} gameAppId
+ * @param {string} [confirmCode] - Optional 2FA code
+ * @returns {Promise<string>} The authorization code
+ */
+export async function generateAuthCodeForRequest(gameAppId, confirmCode = null) {
+  const { getActivatorsForGame, getCredentials: getCredsFromDb } = await import('./activators.js');
+
+  const appId = Number(gameAppId);
+  if (!Number.isInteger(appId) || appId < 1) throw new Error('Invalid game App ID.');
+
+  // Find all activators that have this game with automated method
+  const activators = getActivatorsForGame(appId, true);
+  const automated = activators.filter(a => a.method === 'automated' && a.steam_username);
+
+  if (automated.length === 0) {
+    throw new Error('No automated Steam account found for this game. An activator must add it with `/add` first.');
+  }
+
+  // Try each automated account until one succeeds
+  let lastError = null;
+  for (const row of automated) {
+    const credentials = getCredsFromDb(row.activator_id, appId);
+    if (!credentials?.username || !credentials?.password) {
+      log(`generateAuthCodeForRequest: skipping ${row.steam_username} — credentials missing or unreadable`);
+      continue;
+    }
+
+    log(`generateAuthCodeForRequest: trying account ${credentials.username} for app ${appId}`);
+    try {
+      const code = await generateAuthCode(appId, credentials, confirmCode);
+      return code;
+    } catch (err) {
+      lastError = err;
+      log(`generateAuthCodeForRequest: account ${credentials.username} failed:`, err?.message);
+      // If it's a 2FA prompt, propagate immediately — user needs to provide the code
+      if (err?.message?.includes('Confirmation code')) throw err;
+      // Otherwise try next account
+    }
+  }
+
+  throw lastError || new Error('All automated accounts failed to generate a code for this game.');
 }

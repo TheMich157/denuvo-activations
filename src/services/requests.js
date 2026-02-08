@@ -151,6 +151,36 @@ export function getUnverifiedPendingOlderThan(maxAgeMinutes) {
   `).all(maxAgeMinutes);
 }
 
+/** Set the no_auto_close flag on a request. */
+export function setNoAutoClose(requestId, value = true) {
+  db.prepare('UPDATE requests SET no_auto_close = ? WHERE id = ?').run(value ? 1 : 0, requestId);
+  scheduleSave();
+}
+
+/** Get queue position and count for a user's pending request. */
+export function getQueuePosition(requestId) {
+  const req = db.prepare('SELECT * FROM requests WHERE id = ?').get(requestId);
+  if (!req || req.status !== 'pending') return null;
+  const ahead = db.prepare(`
+    SELECT COUNT(*) AS n FROM requests
+    WHERE status = 'pending' AND game_app_id = ? AND datetime(created_at) < datetime(?)
+  `).get(req.game_app_id, req.created_at);
+  const total = db.prepare(`
+    SELECT COUNT(*) AS n FROM requests WHERE status = 'pending' AND game_app_id = ?
+  `).get(req.game_app_id);
+  return { position: (ahead?.n ?? 0) + 1, total: total?.n ?? 1, gameName: req.game_name, gameAppId: req.game_app_id };
+}
+
+/** Get all pending/in_progress requests for a user. */
+export function getUserActiveRequests(userId) {
+  return db.prepare(`
+    SELECT id, game_app_id, game_name, status, issuer_id, created_at, ticket_channel_id
+    FROM requests
+    WHERE buyer_id = ? AND status IN ('pending', 'in_progress')
+    ORDER BY created_at ASC
+  `).all(userId);
+}
+
 /** All open requests (pending or in_progress) that have a ticket channel. */
 export function getOpenTicketRequests() {
   return db.prepare(`

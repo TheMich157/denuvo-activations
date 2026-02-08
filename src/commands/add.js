@@ -134,6 +134,16 @@ export async function handleSelect(interaction) {
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setPlaceholder('Stored encrypted')
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('consent')
+        .setLabel('Allow staff to view credentials if auto fails? (yes/no)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setPlaceholder('yes or no')
+        .setMaxLength(3)
+        .setMinLength(2)
     )
   );
 
@@ -147,6 +157,8 @@ export async function handleModal(interaction) {
   const game = getGameByAppId(appId);
   const username = interaction.fields.getTextInputValue('username');
   const password = interaction.fields.getTextInputValue('password');
+  const consentRaw = interaction.fields.getTextInputValue('consent').trim().toLowerCase();
+  const consentGranted = consentRaw === 'yes' || consentRaw === 'y';
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -159,7 +171,7 @@ export async function handleModal(interaction) {
   }
 
   const initialStock = 5;
-  addActivatorGame(interaction.user.id, appId, game.name, 'automated', { username, password }, initialStock);
+  addActivatorGame(interaction.user.id, appId, game.name, 'automated', { username, password }, initialStock, consentGranted);
   logRestock({
     activatorId: interaction.user.id,
     gameAppId: appId,
@@ -172,8 +184,11 @@ export async function handleModal(interaction) {
   const twoFANote = testResult.requires2FA
     ? ' When generating a code, you\'ll be asked for the 5-digit confirmation code Steam sends to your email.'
     : '';
+  const consentNote = consentGranted
+    ? ' Staff can view credentials if automation fails.'
+    : ' Staff **cannot** view credentials (no consent).';
   await interaction.editReply({
-    content: `✅ **Login test passed.** Added **${game.name}** with automated activation. **${count}** in stock. Credentials stored encrypted.${twoFANote}`,
+    content: `✅ **Login test passed.** Added **${game.name}** with automated activation. **${count}** in stock. Credentials stored encrypted.${twoFANote}${consentNote}`,
   });
   syncPanelMessage(interaction.client, buildPanelMessagePayload()).catch(() => {});
   notifyWaitlistAndClear(interaction.client, appId).catch(() => {});

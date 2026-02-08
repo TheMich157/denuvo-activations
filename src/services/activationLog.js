@@ -1,6 +1,7 @@
 import { EmbedBuilder } from 'discord.js';
 import { loggingConfig } from '../config/logging.js';
 import { debug } from '../utils/debug.js';
+import { db } from '../db/index.js';
 
 const log = debug('activationLog');
 
@@ -39,14 +40,76 @@ function truncateCode(code) {
   return s.slice(0, EMBED_FIELD_MAX - 20) + '… (truncated)';
 }
 
+/** Get activator performance stats for the audit log. */
+function getActivatorStats(issuerId) {
+  try {
+    // Today's completions
+    const today = db.prepare(`
+      SELECT COUNT(*) AS n FROM requests
+      WHERE issuer_id = ? AND status = 'completed' AND date(completed_at) = date('now')
+    `).get(issuerId);
+
+    // Total completions
+    const total = db.prepare(`
+      SELECT COUNT(*) AS n FROM requests WHERE issuer_id = ? AND status = 'completed'
+    `).get(issuerId);
+
+    // Total assigned (completed + failed + cancelled where they were issuer)
+    const totalAssigned = db.prepare(`
+      SELECT COUNT(*) AS n FROM requests
+      WHERE issuer_id = ? AND status IN ('completed', 'failed', 'cancelled')
+    `).get(issuerId);
+
+    // Average response time (time from created_at to completed_at, in minutes)
+    const avgTime = db.prepare(`
+      SELECT AVG((julianday(completed_at) - julianday(created_at)) * 24 * 60) AS avg_min
+      FROM requests
+      WHERE issuer_id = ? AND status = 'completed' AND completed_at IS NOT NULL
+        AND datetime(completed_at) > datetime('now', '-30 days')
+    `).get(issuerId);
+
+    const completionRate = totalAssigned?.n > 0
+      ? Math.round((total?.n / totalAssigned?.n) * 100)
+      : 100;
+
+    const avgMin = avgTime?.avg_min;
+    let avgDisplay = 'N/A';
+    if (avgMin != null && !isNaN(avgMin)) {
+      if (avgMin < 60) avgDisplay = `${Math.round(avgMin)} min`;
+      else avgDisplay = `${(avgMin / 60).toFixed(1)} hrs`;
+    }
+
+    return {
+      today: today?.n ?? 0,
+      total: total?.n ?? 0,
+      completionRate,
+      avgResponseTime: avgDisplay,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Log a completed activation: who activated, when, with whom, game, token, request id.
+ * Enriched with activator performance stats.
  * @param {Object} req - Full request row from DB (id, buyer_id, issuer_id, game_name, game_app_id, auth_code, completed_at, points_charged, ticket_channel_id, created_at)
  */
 export async function logActivation(req) {
   if (!req?.id || !req.auth_code) return;
   const completedAt = req.completed_at ? new Date(req.completed_at) : new Date();
   const codeDisplay = truncateCode(req.auth_code);
+
+  // Calculate how long this specific activation took
+  let durationDisplay = '';
+  if (req.created_at) {
+    const created = new Date(req.created_at);
+    const diffMs = completedAt.getTime() - created.getTime();
+    const diffMin = Math.round(diffMs / 60000);
+    if (diffMin < 60) durationDisplay = `${diffMin} min`;
+    else durationDisplay = `${(diffMin / 60).toFixed(1)} hrs`;
+  }
+
   const embed = new EmbedBuilder()
     .setColor(0x57f287)
     .setTitle('✅ Activation completed')
@@ -58,10 +121,27 @@ export async function logActivation(req) {
       { name: 'Activator (issuer)', value: `<@${req.issuer_id}> (\`${req.issuer_id}\`)`, inline: false },
       { name: 'Buyer', value: `<@${req.buyer_id}> (\`${req.buyer_id}\`)`, inline: false },
       { name: 'Auth code / token', value: `\`\`\`\n${codeDisplay}\n\`\`\``, inline: false },
-      { name: 'Completed at', value: `<t:${Math.floor(completedAt.getTime() / 1000)}:F>`, inline: true }
-    )
-    .setFooter({ text: `Ticket #${req.id.slice(0, 8).toUpperCase()}` })
-    .setTimestamp(completedAt);
+      { name: 'Completed at', value: `<t:${Math.floor(completedAt.getTime() / 1000)}:F>`, inline: true },
+    );
+
+  if (durationDisplay) {
+    embed.addFields({ name: '⏱️ Duration', value: durationDisplay, inline: true });
+  }
+
+  // Activator performance stats
+  if (req.issuer_id) {
+    const stats = getActivatorStats(req.issuer_id);
+    if (stats) {
+      embed.addFields({
+        name: '📊 Activator Stats',
+        value: `Today: **${stats.today}** • Total: **${stats.total}** • Rate: **${stats.completionRate}%** • Avg: **${stats.avgResponseTime}**`,
+        inline: false,
+      });
+    }
+  }
+
+  embed.setFooter({ text: `Ticket #${req.id.slice(0, 8).toUpperCase()}` });
+  embed.setTimestamp(completedAt);
   await sendToLogChannel(embed);
 }
 

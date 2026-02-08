@@ -136,6 +136,7 @@ async function runStaleCheck() {
     SELECT id, buyer_id, issuer_id, game_app_id, game_name, ticket_channel_id
     FROM requests
     WHERE status = 'in_progress'
+      AND COALESCE(no_auto_close, 0) = 0
       AND datetime(COALESCE(updated_at, created_at)) < datetime('now', '-' || ? || ' minutes')
   `).all(STALE_TICKET_MINUTES);
 

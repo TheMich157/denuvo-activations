@@ -4,13 +4,13 @@ import { config } from '../config.js';
 import { isValidDiscordId, isValidAppId } from '../utils/validate.js';
 import { isAway } from './activatorStatus.js';
 
-export function addActivatorGame(activatorId, gameAppId, gameName, method, credentials = null, stockQuantity = 5) {
+export function addActivatorGame(activatorId, gameAppId, gameName, method, credentials = null, stockQuantity = 5, credsViewable = false) {
   if (!isValidDiscordId(activatorId) || !isValidAppId(gameAppId)) throw new Error('Invalid activator or game ID');
   if (!['manual', 'automated'].includes(method)) throw new Error('Invalid method');
   const q = Math.max(1, Math.min(9999, stockQuantity));
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO activator_games (activator_id, game_app_id, game_name, method, credentials_encrypted, steam_username, stock_quantity)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO activator_games (activator_id, game_app_id, game_name, method, credentials_encrypted, steam_username, stock_quantity, creds_viewable)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let encrypted = null;
   let steamUsername = null;
@@ -18,7 +18,7 @@ export function addActivatorGame(activatorId, gameAppId, gameName, method, crede
     encrypted = encrypt(JSON.stringify(credentials), config.encryptionKey);
     steamUsername = credentials.username ?? null;
   }
-  stmt.run(activatorId, gameAppId, gameName, method, encrypted, steamUsername, q);
+  stmt.run(activatorId, gameAppId, gameName, method, encrypted, steamUsername, q, credsViewable ? 1 : 0);
   scheduleSave();
 }
 
@@ -285,4 +285,50 @@ export function getCredentials(activatorId, gameAppId) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Get viewable credentials for a game — only if the activator gave consent.
+ * Returns { username, password, activatorId, gameName } or null.
+ */
+export function getViewableCredentials(gameAppId) {
+  if (!config.encryptionKey || config.encryptionKey.length < 64) return null;
+  try {
+    const row = db.prepare(`
+      SELECT activator_id, game_name, credentials_encrypted, steam_username FROM activator_games
+      WHERE game_app_id = ? AND method = 'automated' AND creds_viewable = 1 AND credentials_encrypted IS NOT NULL
+      LIMIT 1
+    `).get(gameAppId);
+    if (!row?.credentials_encrypted) return null;
+    const creds = JSON.parse(decrypt(row.credentials_encrypted, config.encryptionKey));
+    return { ...creds, activatorId: row.activator_id, gameName: row.game_name };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get all automated games for an activator with consent info.
+ */
+export function getActivatorAutomatedGames(activatorId) {
+  return db.prepare(`
+    SELECT game_app_id, game_name, steam_username, creds_viewable, COALESCE(stock_quantity, 5) AS stock_quantity
+    FROM activator_games
+    WHERE activator_id = ? AND method = 'automated'
+    ORDER BY game_name ASC
+  `).all(activatorId);
+}
+
+/**
+ * Get all automated games across all activators (for whitelisted staff).
+ * Groups by game, shows which accounts have it and consent status.
+ */
+export function getAllAutomatedGames() {
+  return db.prepare(`
+    SELECT ag.game_app_id, ag.game_name, ag.steam_username, ag.activator_id,
+           ag.creds_viewable, COALESCE(ag.stock_quantity, 5) AS stock_quantity
+    FROM activator_games ag
+    WHERE ag.method = 'automated' AND ag.credentials_encrypted IS NOT NULL
+    ORDER BY ag.game_name ASC, ag.creds_viewable DESC
+  `).all();
 }

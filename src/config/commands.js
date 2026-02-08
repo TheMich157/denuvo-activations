@@ -6,15 +6,15 @@ export const WHITELISTED_COMMANDS = [
   'stock', 'removestock', 'bulkstock', 'addpoints',
   'ticketpanel', 'closepanel', 'closealltickets', 'refreshtickets', 'reloadgames', 'blacklist',
   'preorder', 'tier', 'warn', 'giveaway', 'bulkcode',
-  'audit', 'info', 'schedule', 'skiptoken', 'transcript',
+  'audit', 'info', 'schedule', 'skiptoken', 'transcript', 'credentials',
 ];
 
 /** Commands that require either Activator role OR whitelist */
-export const STAFF_COMMANDS = ['away', 'waitlist'];
+export const STAFF_COMMANDS = ['away', 'waitlist', 'ticketadd', 'ticketremove', 'noclose', 'bulkdone'];
 
 /** Commands anyone in the server can use (no restrictions) */
 export const PUBLIC_COMMANDS = [
   'profile', 'stats', 'leaderboard', 'shop',
   'pricegame', 'settings', 'transfer', 'appeal', 'vote', 'level',
-  'daily', 'cooldown', 'history', 'mywaitlist',
+  'daily', 'cooldown', 'history', 'mywaitlist', 'queue',
 ];

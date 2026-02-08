@@ -13,7 +13,7 @@ import {
   clearState,
 } from '../services/screenshotVerify/state.js';
 import { config } from '../config.js';
-import { fetchManifest, fetchLuaManifest } from '../services/manifest.js';
+import { fetchManifest, fetchLuaManifest, fetchSteamStoreInfo } from '../services/manifest.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
 import { getGameByAppId, getGameDisplayName } from '../utils/games.js';
 import {
@@ -441,11 +441,6 @@ async function handleManifestRequest(message) {
   }
 
   const appId = appIdMatch[1];
-
-  // Resolve game name from list.json if available
-  const knownGame = getGameByAppId(parseInt(appId, 10));
-  const gameName = knownGame ? getGameDisplayName(knownGame) : null;
-  const gameLabel = gameName ? `**${gameName}** (${appId})` : `App ID **${appId}**`;
   const modeLabel = isLua ? 'Lua manifest' : 'manifest';
 
   // Show loading reaction + pending embed
@@ -454,103 +449,123 @@ async function handleManifestRequest(message) {
   const pendingEmbed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(`📦 Fetching ${isLua ? 'Lua Manifest' : 'Manifest'}…`)
-    .setDescription(`Downloading ${modeLabel} for ${gameLabel}. Please wait…`)
+    .setDescription(`Downloading ${modeLabel} for App ID **${appId}**. Please wait…`)
     .setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` })
     .setTimestamp();
   const pendingMsg = await message.reply({ embeds: [pendingEmbed] });
 
   try {
-    // Remove loading reaction, add success
+    // Fetch Steam store info in parallel with the manifest download
+    const storeInfoPromise = fetchSteamStoreInfo(appId).catch(() => null);
+
     const clearLoading = async () => {
       await message.reactions.cache.get('📦')?.users?.remove(message.client.user.id).catch(() => {});
       await message.react('✅').catch(() => {});
     };
 
+    /** Build a game-info enriched embed. Name is hyperlinked to Steam store. */
+    const buildGameEmbed = (storeInfo, color, title) => {
+      const embed = new EmbedBuilder().setColor(color).setTimestamp();
+      if (storeInfo) {
+        embed.setTitle(title);
+        embed.setURL(storeInfo.url);
+        embed.setDescription(storeInfo.description);
+        embed.setThumbnail(storeInfo.headerImage);
+        embed.addFields(
+          { name: '🎮 Game', value: `[${storeInfo.name}](${storeInfo.url})`, inline: true },
+          { name: '🏷️ App ID', value: `\`${appId}\``, inline: true },
+          { name: '💰 Price', value: storeInfo.price, inline: true },
+          { name: '🎭 Genre', value: storeInfo.genres, inline: false },
+        );
+      } else {
+        // Fallback if Steam API failed
+        const knownGame = getGameByAppId(parseInt(appId, 10));
+        const gameName = knownGame ? getGameDisplayName(knownGame) : null;
+        embed.setTitle(title);
+        if (gameName) {
+          embed.setDescription(`**${gameName}** (\`${appId}\`)`);
+        } else {
+          embed.setDescription(`App ID \`${appId}\``);
+        }
+      }
+      embed.setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` });
+      return embed;
+    };
+
+    // Check if this game requires Denuvo activation (exists in list.json)
+    const denuvoGame = getGameByAppId(parseInt(appId, 10));
+
     if (isLua) {
-      // Lua manifest mode
-      const { script } = await fetchLuaManifest(appId);
+      const [{ script }, storeInfo] = await Promise.all([fetchLuaManifest(appId), storeInfoPromise]);
       await clearLoading();
 
-      if (script.length <= 1900) {
-        const successEmbed = new EmbedBuilder()
-          .setColor(0x57f287)
-          .setTitle('✅ Lua Manifest Ready')
-          .setDescription(`Lua manifest for ${gameLabel}:\n\`\`\`lua\n${script}\n\`\`\``)
-          .setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` })
-          .setTimestamp();
-        await pendingMsg.edit({ embeds: [successEmbed] });
+      if (script.length <= 1500) {
+        const embed = buildGameEmbed(storeInfo, 0x57f287, '✅ Lua Manifest Ready');
+        embed.addFields({ name: '📜 Script', value: `\`\`\`lua\n${script}\n\`\`\``, inline: false });
+        await pendingMsg.edit({ embeds: [embed] });
       } else {
-        // Too large for embed — send as .lua file
-        const attachment = new AttachmentBuilder(
-          Buffer.from(script, 'utf-8'),
-          { name: `manifest_${appId}.lua` }
-        );
-        const successEmbed = new EmbedBuilder()
-          .setColor(0x57f287)
-          .setTitle('✅ Lua Manifest Ready')
-          .setDescription(`Lua manifest for ${gameLabel} (attached as file).`)
-          .addFields({ name: '📏 Size', value: `${(Buffer.byteLength(script) / 1024).toFixed(1)} KB`, inline: true })
-          .setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` })
-          .setTimestamp();
-        await pendingMsg.edit({ embeds: [successEmbed], files: [attachment] });
+        const attachment = new AttachmentBuilder(Buffer.from(script, 'utf-8'), { name: `manifest_${appId}.lua` });
+        const embed = buildGameEmbed(storeInfo, 0x57f287, '✅ Lua Manifest Ready');
+        embed.addFields({ name: '📏 Size', value: `${(Buffer.byteLength(script) / 1024).toFixed(1)} KB`, inline: true });
+        await pendingMsg.edit({ embeds: [embed], files: [attachment] });
       }
     } else {
-      // Regular manifest download mode
-      const result = await fetchManifest(appId);
+      const [result, storeInfo] = await Promise.all([fetchManifest(appId), storeInfoPromise]);
       await clearLoading();
 
       if (result.type === 'file') {
         const sizeKb = (result.buffer.length / 1024).toFixed(1);
         const attachment = new AttachmentBuilder(result.buffer, { name: result.filename });
-        const successEmbed = new EmbedBuilder()
-          .setColor(0x57f287)
-          .setTitle('✅ Manifest Ready')
-          .setDescription(`Manifest for ${gameLabel} is ready.`)
-          .addFields(
-            { name: '📁 File', value: result.filename, inline: true },
-            { name: '📏 Size', value: `${sizeKb} KB`, inline: true },
-          )
-          .setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` })
-          .setTimestamp();
-        await pendingMsg.edit({ embeds: [successEmbed], files: [attachment] });
+        const embed = buildGameEmbed(storeInfo, 0x57f287, '✅ Manifest Ready');
+        embed.addFields(
+          { name: '📁 File', value: `\`${result.filename}\``, inline: true },
+          { name: '📏 Size', value: `${sizeKb} KB`, inline: true },
+        );
+        await pendingMsg.edit({ embeds: [embed], files: [attachment] });
       } else {
-        // JSON response — format and display
         const jsonStr = JSON.stringify(result.data, null, 2);
-        if (jsonStr.length <= 1900) {
-          const successEmbed = new EmbedBuilder()
-            .setColor(0x57f287)
-            .setTitle('✅ Manifest Ready')
-            .setDescription(`Manifest data for ${gameLabel}:\n\`\`\`json\n${jsonStr}\n\`\`\``)
-            .setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` })
-            .setTimestamp();
-          await pendingMsg.edit({ embeds: [successEmbed] });
+        if (jsonStr.length <= 1500) {
+          const embed = buildGameEmbed(storeInfo, 0x57f287, '✅ Manifest Ready');
+          embed.addFields({ name: '📄 Data', value: `\`\`\`json\n${jsonStr}\n\`\`\``, inline: false });
+          await pendingMsg.edit({ embeds: [embed] });
         } else {
-          const attachment = new AttachmentBuilder(
-            Buffer.from(jsonStr, 'utf-8'),
-            { name: `manifest_${appId}.json` }
-          );
-          const successEmbed = new EmbedBuilder()
-            .setColor(0x57f287)
-            .setTitle('✅ Manifest Ready')
-            .setDescription(`Manifest data for ${gameLabel} (attached as file — too large for embed).`)
-            .setFooter({ text: `Requested by ${message.author.displayName || message.author.username}` })
-            .setTimestamp();
-          await pendingMsg.edit({ embeds: [successEmbed], files: [attachment] });
+          const attachment = new AttachmentBuilder(Buffer.from(jsonStr, 'utf-8'), { name: `manifest_${appId}.json` });
+          const embed = buildGameEmbed(storeInfo, 0x57f287, '✅ Manifest Ready');
+          embed.addFields({ name: '📏 Size', value: `${(Buffer.byteLength(jsonStr) / 1024).toFixed(1)} KB`, inline: true });
+          await pendingMsg.edit({ embeds: [embed], files: [attachment] });
         }
       }
     }
+
+    // If the game is in list.json, warn that it requires Denuvo activation
+    if (denuvoGame) {
+      const warnEmbed = new EmbedBuilder()
+        .setColor(0xfee75c)
+        .setTitle('⚠️ Denuvo Activation Required')
+        .setDescription(
+          `**${getGameDisplayName(denuvoGame)}** uses **Denuvo DRM** and will not work without an activation.\n\n` +
+          `Head over to <#1469390899162382510> to request an activation code.`
+        )
+        .setTimestamp();
+      await message.channel.send({ embeds: [warnEmbed] });
+    }
   } catch (err) {
-    // Remove loading reaction, add failure
     await message.reactions.cache.get('📦')?.users?.remove(message.client.user.id).catch(() => {});
     await message.react('❌').catch(() => {});
 
+    const storeInfo = await fetchSteamStoreInfo(appId).catch(() => null);
     const errorEmbed = new EmbedBuilder()
       .setColor(0xed4245)
       .setTitle(`❌ ${isLua ? 'Lua Manifest' : 'Manifest'} Failed`)
-      .setDescription(`Could not fetch ${modeLabel} for ${gameLabel}.`)
-      .addFields({ name: 'Error', value: err.message || 'Unknown error', inline: false })
-      .setFooter({ text: 'Check the App ID and try again' })
       .setTimestamp();
+    if (storeInfo) {
+      errorEmbed.setDescription(`Could not fetch ${modeLabel} for [${storeInfo.name}](${storeInfo.url}) (\`${appId}\`).`);
+      errorEmbed.setThumbnail(storeInfo.headerImage);
+    } else {
+      errorEmbed.setDescription(`Could not fetch ${modeLabel} for App ID **${appId}**.`);
+    }
+    errorEmbed.addFields({ name: 'Error', value: err.message || 'Unknown error', inline: false });
+    errorEmbed.setFooter({ text: 'Check the App ID and try again' });
     await pendingMsg.edit({ embeds: [errorEmbed] });
   }
   return true;
