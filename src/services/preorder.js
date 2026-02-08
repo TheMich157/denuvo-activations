@@ -133,11 +133,15 @@ export function getClaim(preorderId, userId) {
  * Remove a specific user's claim from a preorder.
  */
 export function removeClaim(preorderId, userId) {
-  const result = db.prepare(
-    'DELETE FROM preorder_claims WHERE preorder_id = ? AND user_id = ?'
-  ).run(preorderId, userId);
-  scheduleSave();
-  return result.changes > 0;
+  try {
+    const result = db.prepare(
+      'DELETE FROM preorder_claims WHERE preorder_id = ? AND user_id = ?'
+    ).run(preorderId, userId);
+    scheduleSave();
+    return result?.changes > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function getPendingClaims() {
@@ -264,6 +268,7 @@ export function buildPreorderEmbed({ preorder, preorderId, status, spotsText, ko
     )
     .addFields(
       { name: '🎮 Game', value: preorder.game_name, inline: true },
+      { name: '🏷️ App ID', value: preorder.game_app_id ? `[\`${preorder.game_app_id}\`](https://store.steampowered.com/app/${preorder.game_app_id})` : 'N/A', inline: true },
       { name: '📋 Status', value: statusEmoji, inline: true },
       { name: '🎟️ Spots', value: spots, inline: true },
       { name: '👤 Created by', value: `<@${preorder.created_by}>`, inline: true },

@@ -105,6 +105,10 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub.setName('guide')
       .setDescription('Post a locked guide in the preorder forum channel')
+  )
+  .addSubcommand((sub) =>
+    sub.setName('refreshall')
+      .setDescription('Refresh all preorder forum post embeds (updates App IDs and spots)')
   );
 
 /** Update the forum post embed for a preorder. */
@@ -198,6 +202,7 @@ export async function execute(interaction) {
         [
           `**#${preorderId}** — ${gameName}`,
           `💰 Price: $${price.toFixed(2)}`,
+          `🎮 App ID: ${appId}`,
           `🎟️ Max spots: ${maxSpots || 'Unlimited'}`,
           forumPost ? `📌 Forum post: <#${forumPost.id}>` : '📌 No forum post (PREORDER_CHANNEL_ID not set)',
         ].join('\n')
@@ -230,7 +235,8 @@ export async function execute(interaction) {
       const spots = getPreorderSpots(p.id);
       const spotsText = formatSpotsText(spots);
       const icon = statusIcons[p.status] || '⬜';
-      return `${icon} **#${p.id}** — ${p.game_name} — $${p.price.toFixed(2)} — ${spotsText}`;
+      const appIdTag = p.game_app_id ? ` (\`${p.game_app_id}\`)` : '';
+      return `${icon} **#${p.id}** — ${p.game_name}${appIdTag} — $${p.price.toFixed(2)} — ${spotsText}`;
     });
     if (preorders.length > 20) lines.push(`... and ${preorders.length - 20} more`);
 
@@ -820,5 +826,44 @@ export async function execute(interaction) {
     } catch (err) {
       await interaction.reply({ content: `Failed to create guide: ${err.message}`, flags: MessageFlags.Ephemeral });
     }
+  }
+
+  /* ───────── REFRESHALL ───────── */
+  else if (sub === 'refreshall') {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const allPreorders = getAllPreorders();
+    const withThreads = allPreorders.filter((p) => p.thread_id);
+
+    if (withThreads.length === 0) {
+      return interaction.editReply({ content: 'No preorders with forum posts found.' });
+    }
+
+    let updated = 0;
+    let failed = 0;
+
+    for (const p of withThreads) {
+      try {
+        await updateForumPost(interaction.client, p, p.id);
+        updated++;
+      } catch {
+        failed++;
+      }
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(updated > 0 ? 0x57f287 : 0xed4245)
+      .setTitle('🔄 Preorder Embeds Refreshed')
+      .setDescription(
+        [
+          `Refreshed **${updated}** / ${withThreads.length} preorder forum posts.`,
+          failed > 0 ? `⚠️ ${failed} failed (thread deleted or inaccessible).` : '',
+          '',
+          'All embeds now show updated App IDs, spots, and status.',
+        ].filter(Boolean).join('\n')
+      )
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed] });
   }
 }
