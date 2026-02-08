@@ -1,12 +1,10 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
 import { db } from '../db/index.js';
-import { getBalance } from '../services/points.js';
 import { getActivatorGames, getDailyCount, getPendingRestockCount, getNextRestockAt } from '../services/activators.js';
 import { getCooldownsForUser } from '../services/requests.js';
 import { isActivator } from '../utils/activator.js';
 import { isWhitelisted } from '../utils/whitelist.js';
 import { requireGuild } from '../utils/guild.js';
-import { formatPointsAsMoney } from '../utils/pointsFormat.js';
 import { getGameDisplayName, getGameByAppId, getCooldownHours } from '../utils/games.js';
 import { isAway } from '../services/activatorStatus.js';
 import { getActivatorRating, formatStars } from '../services/ratings.js';
@@ -48,7 +46,7 @@ export async function execute(interaction) {
     ? interaction.member
     : await interaction.guild.members.fetch(targetUser.id).catch(() => null);
   const userId = targetUser.id;
-  const points = getBalance(userId);
+  // Points system removed
   const activator = targetMember ? isActivator(targetMember) : false;
   const games = activator ? getActivatorGames(userId) : [];
   const restockHours = config.restockHours || 24;
@@ -81,12 +79,7 @@ export async function execute(interaction) {
     inline: true,
   });
 
-  // —— Credits ——
-  embed.addFields({
-    name: '💰 Credits',
-    value: `**${points}** pts (${formatPointsAsMoney(points)})`,
-    inline: true,
-  });
+  // —— Credits section removed (points system disabled) ——
 
   // —— Quick stats ——
   const completedRow = activator
@@ -194,7 +187,7 @@ export async function execute(interaction) {
   // —— Recent history ——
   const historyColumn = activator ? 'issuer_id' : 'buyer_id';
   const historyRows = db.prepare(`
-    SELECT game_app_id, game_name, status, created_at, completed_at, points_charged
+    SELECT game_app_id, game_name, status, created_at, completed_at
     FROM requests
     WHERE ${historyColumn} = ?
     ORDER BY created_at DESC
@@ -209,8 +202,7 @@ export async function execute(interaction) {
       const emoji = statusEmoji[r.status] ?? '❓';
       const date = r.completed_at || r.created_at;
       const ts = date ? `<t:${Math.floor(new Date(date).getTime() / 1000)}:d>` : '—';
-      const pts = r.status === 'completed' && activator ? ` +${r.points_charged}pts` : '';
-      return `${emoji} **${name}** ${ts}${pts}`;
+      return `${emoji} **${name}** ${ts}`;
     });
 
     const totalRow = db.prepare(

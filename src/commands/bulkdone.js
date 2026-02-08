@@ -76,7 +76,7 @@ export async function handleModal(interaction) {
 
   // Get assigned requests
   const assigned = db.prepare(`
-    SELECT id, game_name, game_app_id, buyer_id, issuer_id, ticket_channel_id, points_charged
+    SELECT id, game_name, game_app_id, buyer_id, issuer_id, ticket_channel_id
     FROM requests
     WHERE issuer_id = ? AND status = 'in_progress'
     ORDER BY created_at ASC

@@ -93,7 +93,7 @@ function getActivatorStats(issuerId) {
 /**
  * Log a completed activation: who activated, when, with whom, game, token, request id.
  * Enriched with activator performance stats.
- * @param {Object} req - Full request row from DB (id, buyer_id, issuer_id, game_name, game_app_id, auth_code, completed_at, points_charged, ticket_channel_id, created_at)
+ * @param {Object} req - Full request row from DB (id, buyer_id, issuer_id, game_name, game_app_id, auth_code, completed_at, ticket_channel_id, created_at)
  */
 export async function logActivation(req) {
   if (!req?.id || !req.auth_code) return;
@@ -117,7 +117,6 @@ export async function logActivation(req) {
     .addFields(
       { name: 'Request ID', value: `\`${req.id}\``, inline: true },
       { name: 'Game', value: `${req.game_name} (\`${req.game_app_id}\`)`, inline: true },
-      { name: 'Points', value: String(req.points_charged ?? 0), inline: true },
       { name: 'Activator (issuer)', value: `<@${req.issuer_id}> (\`${req.issuer_id}\`)`, inline: false },
       { name: 'Buyer', value: `<@${req.buyer_id}> (\`${req.buyer_id}\`)`, inline: false },
       { name: 'Auth code / token', value: `\`\`\`\n${codeDisplay}\n\`\`\``, inline: false },

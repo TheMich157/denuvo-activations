@@ -13,7 +13,6 @@ import { logActivation } from '../services/activationLog.js';
 import { sendCooldownDM } from '../services/cooldownDM.js';
 import { getCooldownHours, getGameByAppId, getGameDisplayName } from '../utils/games.js';
 import { recordStreakActivity, getStreakInfo, getStreakBonus } from '../services/streaks.js';
-import { addPoints } from '../services/points.js';
 import { config } from '../config.js';
 import { isActivator } from '../utils/activator.js';
 import { triggerPanelSync } from '../services/panel.js';
@@ -25,7 +24,7 @@ const VALIDITY_MINUTES = 30;
 /**
  * Shared: complete the request with auth code, log, update ticket message, and send code embed to ticket.
  * Used by both manual "Done" modal and auto-generate flow.
- * @param {Object} req - Request row (must have id, ticket_channel_id, buyer_id, game_name, points_charged)
+ * @param {Object} req - Request row (must have id, ticket_channel_id, buyer_id, game_name)
  * @param {string} authCode
  * @param {import('discord.js').Client} client
  * @returns {Promise<boolean>} - true if completed and sent
@@ -45,14 +44,10 @@ export async function completeAndNotifyTicket(req, authCode, client) {
     sendCooldownDM(client, req.buyer_id, { gameName, cooldownUntil, hours }).catch(() => {});
   }
 
-  // Streak tracking & bonus
+  // Streak tracking only - points system removed
   if (req.issuer_id) {
     recordStreakActivity(req.issuer_id);
-    const streak = getStreakInfo(req.issuer_id);
-    const bonus = getStreakBonus(streak.current);
-    if (bonus > 0) {
-      addPoints(req.issuer_id, bonus, 'streak_bonus', req.id);
-    }
+    // Streak bonus points removed
   }
 
   // Save transcript on completion
@@ -213,7 +208,7 @@ export async function handleModal(interaction) {
   }
 
   await interaction.reply({
-    content: `✅ **Activation completed.** Auth code sent to ticket. **${req.points_charged}** points transferred to you.`,
+    content: `✅ **Activation completed.** Auth code sent to ticket.`,
     flags: MessageFlags.Ephemeral,
   });
   return true;

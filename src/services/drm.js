@@ -3,6 +3,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
 import { drmConfig } from '../config/drm.config.js';
+import { steamTicketConfig, validateSteamTicketConfig } from '../config/steamTicket.config.js';
 import { debug } from '../utils/debug.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1555,4 +1556,64 @@ export async function generateAuthCodeForRequest(gameAppId, confirmCode = null) 
   }
 
   throw lastError || new Error('All automated accounts failed to generate a code for this game.');
+}
+
+/**
+ * Generate authorization code with Steam ticket generator fallback
+ * @param {number} gameAppId
+ * @param {string} [confirmCode] - Optional 2FA code
+ * @returns {Promise<string>} The authorization code
+ */
+export async function generateAuthCodeWithFallback(gameAppId, confirmCode = null) {
+  const appId = Number(gameAppId);
+  if (!Number.isInteger(appId) || appId < 1) throw new Error('Invalid game App ID.');
+
+  // Check if Steam ticket generator is configured and enabled
+  const configValidation = validateSteamTicketConfig();
+  if (steamTicketConfig.enabled && configValidation.valid) {
+    try {
+      // Try Steam ticket generator first if it's set as primary
+      if (steamTicketConfig.mode === 'primary') {
+        log('Attempting Steam ticket generator (primary mode)');
+        const { generateAuthCodeFromTicket } = await import('./steamTicketGenerator.js');
+        return await generateAuthCodeFromTicket(appId);
+      }
+    } catch (error) {
+      log(`Steam ticket generator failed: ${error.message}`);
+      
+      // Don't fall back if Steam API initialization failed and fallback is disabled
+      if (steamTicketConfig.mode === 'primary' && 
+          !steamTicketConfig.errorHandling.fallbackToDrm &&
+          !error.message.includes('Failed to initialize Steam API')) {
+        throw error;
+      }
+      
+      // If Steam API failed but we can generate fallback codes, continue
+      if (error.message.includes('Failed to initialize Steam API') && 
+          steamTicketConfig.errorHandling.retryOnTimeout) {
+        log('Steam API failed, but fallback code generation available');
+        const { generateAuthCodeFromTicket } = await import('./steamTicketGenerator.js');
+        return await generateAuthCodeFromTicket(appId);
+      }
+      
+      // Fall back to DRM if configured
+      if (steamTicketConfig.errorHandling.fallbackToDrm) {
+        log('Falling back to original DRM method');
+      }
+    }
+  }
+
+  // Fall back to original DRM method
+  log('Using original DRM method');
+  return await generateAuthCodeForRequest(gameAppId, confirmCode);
+}
+
+/**
+ * Generate authorization code using Steam ticket generator only
+ * @param {number} gameAppId
+ * @returns {Promise<string>} The authorization code
+ */
+export async function generateAuthCodeFromSteamTicket(gameAppId) {
+  const { generateAuthCodeFromTicket } = await import('./steamTicketGenerator.js');
+  return await generateAuthCodeFromTicket(Number(gameAppId));
 }

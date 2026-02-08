@@ -17,7 +17,7 @@ import { assignIssuer, getRequest, getRequestByChannel, cancelRequest, markScree
 import { saveTranscript } from '../services/transcript.js';
 import { getCredentials } from '../services/activators.js';
 import { setState, clearState } from '../services/screenshotVerify/state.js';
-import { generateAuthCode, generateAuthCodeForRequest, DrmError } from '../services/drm.js';
+import { generateAuthCode, generateAuthCodeForRequest, generateAuthCodeWithFallback, DrmError } from '../services/drm.js';
 import { completeAndNotifyTicket } from '../commands/done.js';
 import { handleSelect as panelHandleSelect, handleRefresh as panelHandleRefresh } from '../commands/panelHandler.js';
 import { handleSelect as addHandleSelect, handleModal as addHandleModal } from '../commands/add.js';
@@ -149,9 +149,10 @@ async function handleAutoCodeButton(interaction) {
 
   try {
     // Use specific activator credentials if available, otherwise search DB for any automated account
+    // Try Steam ticket generator fallback first
     const code = credentials
-      ? await generateAuthCode(req.game_app_id, credentials, null)
-      : await generateAuthCodeForRequest(req.game_app_id, null);
+      ? await generateAuthCodeWithFallback(req.game_app_id, null)
+      : await generateAuthCodeWithFallback(req.game_app_id, null);
     const result = await completeAndNotifyTicket(req, code, interaction.client);
     if (result === 'screenshot_not_verified') {
       await interaction.editReply({
@@ -160,7 +161,7 @@ async function handleAutoCodeButton(interaction) {
       return true;
     }
     await interaction.editReply({
-      content: `✅ **Code generated and sent to the ticket.** **${req.points_charged}** points transferred to you.`,
+      content: `✅ **Code generated and sent to the ticket.**`,
     });
   } catch (err) {
     const msg = err?.message || 'Generation failed.';
@@ -248,8 +249,8 @@ async function handleAutoCodeModal(interaction) {
 
   try {
     const code = credentials
-      ? await generateAuthCode(req.game_app_id, credentials, twoFactorCode)
-      : await generateAuthCodeForRequest(req.game_app_id, twoFactorCode);
+      ? await generateAuthCodeWithFallback(req.game_app_id, twoFactorCode)
+      : await generateAuthCodeWithFallback(req.game_app_id, twoFactorCode);
     const result = await completeAndNotifyTicket(req, code, interaction.client);
     if (result === 'screenshot_not_verified') {
       await interaction.editReply({
@@ -258,7 +259,7 @@ async function handleAutoCodeModal(interaction) {
       return true;
     }
     await interaction.editReply({
-      content: `✅ **Code generated and sent to the ticket.** **${req.points_charged}** points transferred to you.`,
+      content: `✅ **Code generated and sent to the ticket.**`,
     });
   } catch (err) {
     const msg = err?.message || 'Generation failed.';

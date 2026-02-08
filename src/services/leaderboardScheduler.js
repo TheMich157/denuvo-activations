@@ -1,7 +1,5 @@
 import { EmbedBuilder } from 'discord.js';
-import { db } from '../db/index.js';
 import { loggingConfig } from '../config/logging.js';
-import { addPoints } from './points.js';
 import { debug } from '../utils/debug.js';
 
 const log = debug('leaderboardScheduler');
@@ -70,32 +68,23 @@ async function postWeeklySummary() {
 
   const rows = db.prepare(`
     SELECT issuer_id, COUNT(*) AS completions,
-           COALESCE(SUM(points_charged), 0) AS points_earned,
            AVG((julianday(completed_at) - julianday(created_at)) * 24 * 60) AS avg_mins
     FROM requests
     WHERE status = 'completed' AND issuer_id IS NOT NULL AND completed_at >= ?
     GROUP BY issuer_id
-    ORDER BY completions DESC, points_earned DESC
+    ORDER BY completions DESC
     LIMIT 10
   `).all(weekAgo);
 
   if (rows.length === 0) return;
 
-  // Award bonus points to top 3
-  const medals = ['🥇', '🥈', '🥉'];
-  for (let i = 0; i < Math.min(3, rows.length); i++) {
-    const reward = WEEKLY_REWARDS[i];
-    if (reward > 0) {
-      addPoints(rows[i].issuer_id, reward, 'weekly_leaderboard_reward');
-    }
-  }
+  // Remove points reward system
 
   const lines = rows.map((r, i) => {
-    const rank = medals[i] ?? `**${i + 1}.**`;
+    const rank = `**${i + 1}.**`;
     const avgMins = r.avg_mins != null ? Math.round(r.avg_mins) : null;
     const avgText = avgMins != null ? ` • ⚡ ${avgMins < 60 ? `${avgMins}m` : `${Math.floor(avgMins / 60)}h`}` : '';
-    const reward = i < 3 ? ` (+${WEEKLY_REWARDS[i]} bonus pts)` : '';
-    return `${rank} <@${r.issuer_id}> — **${r.completions}** activations • **${r.points_earned}** pts${avgText}${reward}`;
+    return `${rank} <@${r.issuer_id}> — **${r.completions}** activations${avgText}`;
   });
 
   const totalRow = db.prepare(
@@ -107,8 +96,8 @@ async function postWeeklySummary() {
     .setTitle('🏆 Weekly Leaderboard Reset')
     .setDescription(`**${totalRow?.n ?? 0}** activations completed this week!\n\n${lines.join('\n')}`)
     .addFields({
-      name: '🎁 Rewards',
-      value: `Top 3 received bonus points: ${WEEKLY_REWARDS.join(' / ')} pts`,
+      name: '📊 Stats',
+      value: 'Top performers recognized for their activity!',
       inline: false,
     })
     .setFooter({ text: 'Weekly reset — new week starts now!' })
@@ -136,33 +125,24 @@ async function postMonthlySummary() {
 
   const rows = db.prepare(`
     SELECT issuer_id, COUNT(*) AS completions,
-           COALESCE(SUM(points_charged), 0) AS points_earned,
            AVG((julianday(completed_at) - julianday(created_at)) * 24 * 60) AS avg_mins
     FROM requests
     WHERE status = 'completed' AND issuer_id IS NOT NULL
       AND completed_at >= ? AND completed_at < ?
     GROUP BY issuer_id
-    ORDER BY completions DESC, points_earned DESC
+    ORDER BY completions DESC
     LIMIT 10
   `).all(monthISO, monthEndISO);
 
   if (rows.length === 0) return;
 
-  // Award bonus points to top 3
-  const medals = ['🥇', '🥈', '🥉'];
-  for (let i = 0; i < Math.min(3, rows.length); i++) {
-    const reward = MONTHLY_REWARDS[i];
-    if (reward > 0) {
-      addPoints(rows[i].issuer_id, reward, 'monthly_leaderboard_reward');
-    }
-  }
+  // Remove points reward system
 
   const lines = rows.map((r, i) => {
-    const rank = medals[i] ?? `**${i + 1}.**`;
+    const rank = `**${i + 1}.**`;
     const avgMins = r.avg_mins != null ? Math.round(r.avg_mins) : null;
     const avgText = avgMins != null ? ` • ⚡ ${avgMins < 60 ? `${avgMins}m` : `${Math.floor(avgMins / 60)}h`}` : '';
-    const reward = i < 3 ? ` (+${MONTHLY_REWARDS[i]} bonus pts)` : '';
-    return `${rank} <@${r.issuer_id}> — **${r.completions}** activations • **${r.points_earned}** pts${avgText}${reward}`;
+    return `${rank} <@${r.issuer_id}> — **${r.completions}** activations${avgText}`;
   });
 
   const totalRow = db.prepare(
@@ -176,8 +156,8 @@ async function postMonthlySummary() {
     .setTitle(`🏆 Monthly Leaderboard — ${monthLabel}`)
     .setDescription(`**${totalRow?.n ?? 0}** activations completed last month!\n\n${lines.join('\n')}`)
     .addFields({
-      name: '🎁 Rewards',
-      value: `Top 3 received bonus points: ${MONTHLY_REWARDS.join(' / ')} pts`,
+      name: '📊 Stats',
+      value: 'Top performers recognized for their activity!',
       inline: false,
     })
     .setFooter({ text: `${monthLabel} summary — new month starts now!` })

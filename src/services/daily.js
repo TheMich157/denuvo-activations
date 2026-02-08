@@ -1,5 +1,4 @@
 import { db, scheduleSave } from '../db/index.js';
-import { addPoints } from './points.js';
 
 const BASE_REWARD = 15;
 const STREAK_BONUS = 5;
@@ -40,7 +39,7 @@ export function claimDaily(userId) {
     db.prepare(`
       UPDATE daily_claims SET last_claimed_at = datetime('now'), streak = ? WHERE user_id = ?
     `).run(streak, userId);
-    addPoints(userId, reward, 'daily_reward');
+    // Points system removed - only tracking streaks now
     scheduleSave();
     return { ok: true, reward, streak, nextClaimAt: now + CLAIM_COOLDOWN_MS };
   }
@@ -50,7 +49,7 @@ export function claimDaily(userId) {
   db.prepare(`
     INSERT INTO daily_claims (user_id, last_claimed_at, streak) VALUES (?, datetime('now'), 1)
   `).run(userId);
-  addPoints(userId, reward, 'daily_reward');
+  // Points system removed - only tracking streaks now
   scheduleSave();
   return { ok: true, reward, streak: 1, nextClaimAt: now + CLAIM_COOLDOWN_MS };
 }
