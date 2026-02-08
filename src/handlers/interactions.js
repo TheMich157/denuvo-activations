@@ -328,25 +328,18 @@ async function handleCloseTicket(interaction) {
   }
   // Save transcript before closing
   await saveTranscript(interaction.client, interaction.channelId, req.id, 'cancelled').catch(() => {});
-  const hadSkipToken = !!req.used_skip_token;
   cancelRequest(req.id);
   clearState(interaction.channelId);
-  // DM buyer about cancellation + skip token refund
+  // DM buyer about cancellation
   if (interaction.user.id !== req.buyer_id) {
     sendStatusDM(interaction.client, req.buyer_id, 'cancelled', { gameName: req.game_name }).catch(() => {});
   }
-  if (hadSkipToken) {
-    try {
-      const buyer = await interaction.client.users.fetch(req.buyer_id).catch(() => null);
-      if (buyer) await buyer.send(`🔄 Your **skip token** for **${req.game_name}** has been **refunded** since the ticket was closed without generating a code.`).catch(() => {});
-    } catch {}
-  }
   const channel = interaction.channel;
   if (channel?.deletable) {
-    await interaction.reply({ content: `Closing ticket...${hadSkipToken ? ' (skip token refunded)' : ''}`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: 'Closing ticket...', flags: MessageFlags.Ephemeral });
     await channel.delete();
   } else {
-    await interaction.reply({ content: `Ticket cancelled.${hadSkipToken ? ' Skip token refunded.' : ''} I cannot delete this channel.`, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: 'Ticket cancelled. I cannot delete this channel.', flags: MessageFlags.Ephemeral });
   }
   return true;
 }

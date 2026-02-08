@@ -8,7 +8,6 @@ export const config = {
   ticketCategoryId: process.env.TICKET_CATEGORY_ID,
   guildId: process.env.GUILD_ID || null,
   dailyActivationLimit: parseInt(process.env.DAILY_ACTIVATION_LIMIT ?? '5', 10),
-  pointsPerActivation: parseInt(process.env.POINTS_PER_ACTIVATION ?? '50', 10),
   restockHours: parseInt(process.env.RESTOCK_HOURS ?? '24', 10) || 24,
   reviewChannelId: process.env.REVIEW_CHANNEL_ID || null,
   manifestChannelId: process.env.MANIFEST_CHANNEL_ID || null,
@@ -39,12 +38,8 @@ export function validateConfig() {
     throw new Error('ENCRYPTION_KEY must be 64 hex chars');
   }
   const limit = config.dailyActivationLimit;
-  const points = config.pointsPerActivation;
   if (!Number.isInteger(limit) || limit < 1 || limit > 999) {
     throw new Error('DAILY_ACTIVATION_LIMIT must be 1–999');
-  }
-  if (!Number.isInteger(points) || points < 1 || points > 1_000_000) {
-    throw new Error('POINTS_PER_ACTIVATION must be 1–1,000,000');
   }
   const restock = config.restockHours;
   if (!Number.isInteger(restock) || restock < 1 || restock > 8760) {

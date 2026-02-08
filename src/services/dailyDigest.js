@@ -78,12 +78,7 @@ async function postDigest() {
     WHERE created_at >= ? GROUP BY game_app_id ORDER BY cnt DESC LIMIT 5
   `).all(yesterday);
 
-  // Points earned
-  const pointsRow = db.prepare(
-    `SELECT SUM(amount) AS total FROM point_transactions WHERE amount > 0 AND created_at >= ?`
-  ).get(yesterday);
-  const pointsEarned = pointsRow?.total ?? 0;
-
+  
   // Avg response time today
   const avgRow = db.prepare(`
     SELECT AVG((julianday(completed_at) - julianday(created_at)) * 24 * 60) AS avg_mins
@@ -105,7 +100,6 @@ async function postDigest() {
       { name: '📥 Requests', value: `**${created}**`, inline: true },
       { name: '❌ Failed/Cancelled', value: `**${failed}**`, inline: true },
       { name: '⏱️ Avg response', value: avgText, inline: true },
-      { name: '💰 Points earned', value: `**${pointsEarned}**`, inline: true },
       { name: '📦 Stock', value: `**${stock.totalStock}** slots`, inline: true },
     );
 

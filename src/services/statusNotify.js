@@ -105,7 +105,7 @@ export async function notifyActivators(client, { gameName, gameAppId, buyerId, t
           `A new request for **${gameName}** needs an activator!\n\n` +
           `Head to ${channelMention} to claim it.`
         )
-        .setFooter({ text: 'Game Activation • Claim the request to earn points' })
+        .setFooter({ text: 'Game Activation • Claim the request to help' })
         .setTimestamp();
 
       await user.send({ embeds: [embed] }).catch(() => {});

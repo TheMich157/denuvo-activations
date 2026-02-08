@@ -289,17 +289,10 @@ export function cleanupOldData() {
     `DELETE FROM requests WHERE status IN ('completed', 'failed', 'cancelled') AND created_at < datetime('now', '-30 days')`
   ).run();
 
-  // Point transactions older than 90 days
-  db.prepare(
-    `DELETE FROM point_transactions WHERE created_at < datetime('now', '-90 days')`
-  ).run();
-
-  // Users with 0 points and no activity (no requests, no activator games, no transactions in 90 days)
+  // Users with no activity (no requests, no activator games in 90 days)
   db.prepare(`
-    DELETE FROM users WHERE points = 0
-      AND id NOT IN (SELECT DISTINCT buyer_id FROM requests)
+    DELETE FROM users WHERE id NOT IN (SELECT DISTINCT buyer_id FROM requests)
       AND id NOT IN (SELECT DISTINCT activator_id FROM activator_games)
-      AND id NOT IN (SELECT DISTINCT user_id FROM point_transactions)
   `).run();
 
   // Remove activator_games and restock queue entries for games no longer in list.json

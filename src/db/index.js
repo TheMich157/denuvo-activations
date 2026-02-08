@@ -99,10 +99,19 @@ const db = {
 const schema = `
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
-    points INTEGER DEFAULT 0,
     strikes INTEGER DEFAULT 0,
     notify_dm INTEGER DEFAULT 1,
     notify_ping INTEGER DEFAULT 1,
+    notify_status INTEGER DEFAULT 1,
+    notify_waitlist INTEGER DEFAULT 1,
+    notify_levelup INTEGER DEFAULT 1,
+    notify_giveaway INTEGER DEFAULT 1,
+    whitelist INTEGER DEFAULT 0,
+    blacklist INTEGER DEFAULT 0,
+    priority_boost INTEGER DEFAULT 0,
+    xp INTEGER DEFAULT 0,
+    xp_boost_until TEXT,
+    role TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
   );
@@ -133,18 +142,9 @@ const schema = `
     status TEXT NOT NULL CHECK(status IN ('pending', 'in_progress', 'completed', 'failed', 'cancelled')),
     auth_code TEXT,
     ticket_channel_id TEXT,
-    points_charged INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     completed_at TEXT,
     updated_at TEXT
-  );
-  CREATE TABLE IF NOT EXISTS point_transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    amount INTEGER NOT NULL,
-    type TEXT NOT NULL,
-    reference_id TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_activator_games_activator ON activator_games(activator_id);
   CREATE INDEX IF NOT EXISTS idx_activator_games_game ON activator_games(game_app_id);
@@ -528,9 +528,7 @@ export async function initDb() {
   try { sqlDb.exec('ALTER TABLE requests ADD COLUMN no_auto_close INTEGER DEFAULT 0'); } catch {}
   // Screenshot verified column
   try { sqlDb.exec('ALTER TABLE requests ADD COLUMN screenshot_verified INTEGER DEFAULT 0'); } catch {}
-  // Track if a skip token was used for this request (refund on cancel)
-  try { sqlDb.exec('ALTER TABLE requests ADD COLUMN used_skip_token INTEGER DEFAULT 0'); } catch {}
-  // Daily reward claims
+    // Daily reward claims
   try {
     sqlDb.exec(`
       CREATE TABLE IF NOT EXISTS daily_claims (

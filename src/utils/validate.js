@@ -1,7 +1,6 @@
 const DISCORD_ID_REGEX = /^\d{17,19}$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const MAX_POINTS = 1_000_000;
 const MAX_APP_ID = 2_147_483_647;
 const MAX_REASON_LENGTH = 100;
 
@@ -17,11 +16,6 @@ export function isValidAppId(id) {
   if (id == null) return false;
   const n = typeof id === 'number' ? id : parseInt(id, 10);
   return Number.isInteger(n) && n > 0 && n <= MAX_APP_ID;
-}
-
-export function isValidPointsAmount(amount) {
-  const n = parseInt(amount, 10);
-  return Number.isInteger(n) && n > 0 && n <= MAX_POINTS;
 }
 
 export function isValidReason(reason) {

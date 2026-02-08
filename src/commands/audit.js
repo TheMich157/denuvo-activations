@@ -1,6 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
 import { db } from '../db/index.js';
-import { getBalance } from '../services/points.js';
 import { getWarningCount } from '../services/warnings.js';
 import { getUserTierInfo, TIERS } from '../services/tiers.js';
 import { isBlacklisted } from '../services/blacklist.js';
@@ -8,7 +7,6 @@ import { isActivator } from '../utils/activator.js';
 import { requireGuild } from '../utils/guild.js';
 import { getActivatorRating, formatStars } from '../services/ratings.js';
 import { getNotes } from '../services/notes.js';
-import { getTokens } from '../services/skipTokens.js';
 import { getUserAppeals } from '../services/appeals.js';
 
 export const data = new SlashCommandBuilder()
@@ -23,9 +21,6 @@ export async function execute(interaction) {
 
   const user = interaction.options.getUser('user');
   const uid = user.id;
-
-  // Points
-  const points = getBalance(uid);
 
   // Tier
   const tierInfo = getUserTierInfo(uid);
@@ -62,18 +57,6 @@ export async function execute(interaction) {
   // Reviews given
   const reviewsGiven = db.prepare('SELECT COUNT(*) AS n FROM activator_ratings WHERE user_id = ?').get(uid)?.n ?? 0;
 
-  // Recent point transactions
-  const recentTx = db.prepare(`
-    SELECT amount, type, created_at FROM point_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 5
-  `).all(uid);
-  const txLines = recentTx.length > 0
-    ? recentTx.map((t) => {
-        const sign = t.amount >= 0 ? '+' : '';
-        const date = new Date(t.created_at + 'Z');
-        return `\`${sign}${t.amount}\` ${t.type} • <t:${Math.floor(date.getTime() / 1000)}:R>`;
-      }).join('\n')
-    : '*No transactions*';
-
   // Recent warnings
   const recentWarns = db.prepare(`
     SELECT reason, issued_by, created_at FROM warnings WHERE user_id = ? ORDER BY created_at DESC LIMIT 3
@@ -90,7 +73,6 @@ export async function execute(interaction) {
     .setTitle(`🔍 Audit: ${user.displayName}`)
     .setThumbnail(user.displayAvatarURL({ size: 128 }))
     .addFields(
-      { name: '💰 Points', value: `**${points}**`, inline: true },
       { name: '☕ Tier', value: tierLabel, inline: true },
       { name: '⚠️ Warnings', value: `**${warns}**/3`, inline: true },
       { name: '⛔ Blacklisted', value: bl ? '**Yes**' : 'No', inline: true },
@@ -98,15 +80,11 @@ export async function execute(interaction) {
       { name: '📤 As Activator', value: `Completed: **${issuerStats?.completed ?? 0}**/${issuerStats?.total ?? 0}`, inline: true },
       { name: '⭐ Rating', value: ratingText, inline: true },
       { name: '📝 Reviews Given', value: `**${reviewsGiven}**`, inline: true },
-      { name: '💸 Recent Transactions', value: txLines, inline: false },
       { name: '⚠️ Recent Warnings', value: warnLines, inline: false },
     )
     .setTimestamp();
 
-  // Skip tokens
-  const skipTokens = getTokens(uid);
-  if (skipTokens > 0) embed.addFields({ name: '⚡ Skip Tokens', value: `**${skipTokens}**`, inline: true });
-
+  
   // Staff notes
   const notes = getNotes(uid);
   if (notes.length > 0) {

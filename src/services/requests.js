@@ -1,6 +1,5 @@
 import { db, scheduleSave } from '../db/index.js';
 import { getActivatorsForGame, incrementDailyActivation, getCredentials, decrementActivatorStock } from './activators.js';
-import { addPoints } from './points.js';
 import { config } from '../config.js';
 import { isValidDiscordId, isValidRequestId, isValidAppId } from '../utils/validate.js';
 import { getCooldownHours } from '../utils/games.js';
@@ -72,14 +71,12 @@ export function assignIssuer(requestId, issuerId) {
   const canClaim = activators.some((a) => a.activator_id === issuerId);
   if (!canClaim) return { ok: false, error: 'You do not have this game registered or daily limit reached' };
 
-  const points = config.pointsPerActivation;
-
   const succeeded = db.transaction(() => {
     const current = db.prepare('SELECT status FROM requests WHERE id = ?').get(requestId);
     if (!current || current.status !== 'pending') return false;
     db.prepare(`
-      UPDATE requests SET issuer_id = ?, status = 'in_progress', points_charged = ?, updated_at = datetime('now') WHERE id = ?
-    `).run(issuerId, points, requestId);
+      UPDATE requests SET issuer_id = ?, status = 'in_progress', updated_at = datetime('now') WHERE id = ?
+    `).run(issuerId, requestId);
     return true;
   });
   if (succeeded !== true) return { ok: false, error: 'Request was already claimed' };
@@ -96,7 +93,6 @@ export function completeRequest(requestId, authCode) {
   db.prepare(`
     UPDATE requests SET status = 'completed', auth_code = ?, completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?
   `).run(code, requestId);
-  addPoints(req.issuer_id, req.points_charged, 'activation_completed', requestId);
   const steamId = getCredentials(req.issuer_id, req.game_app_id)?.username ?? `manual_${req.issuer_id}_${req.game_app_id}`;
   incrementDailyActivation(steamId);
   decrementActivatorStock(req.issuer_id, req.game_app_id);
@@ -131,10 +127,6 @@ export function cancelRequest(requestId) {
   if (!req) return false;
   if (req.status === 'completed' || req.status === 'cancelled' || req.status === 'failed') return false;
   db.prepare(`UPDATE requests SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?`).run(requestId);
-  // Refund skip token if one was used and request was never completed
-  if (req.used_skip_token) {
-    import('./skipTokens.js').then(m => m.addTokens(req.buyer_id, 1)).catch(() => {});
-  }
   scheduleSave();
   return true;
 }

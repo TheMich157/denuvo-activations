@@ -8,7 +8,6 @@ import {
   } from 'discord.js';
   import { createRequest, setTicketChannel, checkCooldown, assignIssuer } from './requests.js';
   import { getActivatorsForGame, getBestActivator, getCredentials } from './activators.js';
-  import { getBalance } from './points.js';
   import { getGameByAppId, getCooldownHours, getGameDisplayName } from '../utils/games.js';
   import { config } from '../config.js';
   import { isValidAppId } from '../utils/validate.js';
@@ -19,7 +18,6 @@ import {
   import { isAway } from './activatorStatus.js';
   import { notifyActivators } from './statusNotify.js';
   import { getUserTierInfo, getAdjustedCooldown, TIERS } from './tiers.js';
-  import { getTokens, useToken } from './skipTokens.js';
   import { db } from '../db/index.js';
   
   export async function createTicketForGame(interaction, appId, options = {}) {
@@ -63,17 +61,10 @@ import {
   
     // Skip cooldown for preorders — donation already verified
     const tierInfo = getUserTierInfo(interaction.user.id);
-    let usedSkipToken = false;
     if (!preorder) {
       const cooldownUntil = isActivator(interaction.member) ? null : checkCooldown(interaction.user.id, game.appId);
       if (cooldownUntil) {
-        // Check for skip token first
-        const hasSkipToken = getTokens(interaction.user.id) > 0;
-        if (hasSkipToken) {
-          useToken(interaction.user.id);
-          usedSkipToken = true;
-          // Skip the cooldown entirely
-        } else if (tierInfo.tier !== 'none') {
+        if (tierInfo.tier !== 'none') {
           // Tier members get reduced cooldown
           const baseCd = getCooldownHours(game.appId);
           const adjustedCd = getAdjustedCooldown(baseCd, interaction.user.id);
@@ -91,17 +82,15 @@ import {
         } else {
           const mins = Math.ceil((cooldownUntil - Date.now()) / 60000);
           const hoursLabel = getCooldownHours(game.appId) === 48 ? '48 hours (high demand)' : '24 hours';
-          const tokenHint = `\n> 💡 Buy a **skip token** with \`/skiptoken buy\` to bypass cooldowns!`;
           return {
             ok: false,
-            error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${hoursLabel}).${tokenHint}`,
+            error: `You can request **${getGameDisplayName(game)}** again in **${mins} minutes** (cooldown: ${hoursLabel}).`,
           };
         }
       }
     }
   
-    // Queue priority: VIP users (whitelisted + high points), tier members, or priority boost from shop
-    const buyerPoints = getBalance(interaction.user.id);
+    // Queue priority: tier members or priority boost from shop
     let hasPriorityBoost = false;
     try {
       const boostRow = db.prepare('SELECT priority_boost FROM users WHERE id = ?').get(interaction.user.id);
@@ -111,14 +100,9 @@ import {
         db.prepare('UPDATE users SET priority_boost = 0, updated_at = datetime(\'now\') WHERE id = ?').run(interaction.user.id);
       }
     } catch {}
-    const isVip = (isWhitelisted(interaction.user.id) && buyerPoints >= 100) || tierInfo.tier !== 'none' || hasPriorityBoost;
+    const isVip = tierInfo.tier !== 'none' || hasPriorityBoost;
 
     const requestId = createRequest(interaction.user.id, game.appId, game.name);
-
-    // Mark if skip token was used (for refund on cancel)
-    if (usedSkipToken) {
-      db.prepare('UPDATE requests SET used_skip_token = 1 WHERE id = ?').run(requestId);
-    }
 
     // Calculate queue position
     const queuePosition = db.prepare(`
@@ -230,7 +214,7 @@ import {
           `**Requester:** <@${interaction.user.id}>${vipTag}`,
           '',
           `${activatorMentions}`,
-          'First activator to press the button claims this request. Staff earn points per completion.',
+          'First activator to press the button claims this request.',
         ].join('\n')
       )
       .addFields(
@@ -263,9 +247,8 @@ import {
       allowedMentions: { users: autoAssigned && best ? [best.activator_id] : [], roles: config.activatorRoleId ? [config.activatorRoleId] : [] },
     };
   
-    // Build extra info line for skip token / queue
+    // Build extra info line for queue
     const extraLines = [];
-    if (usedSkipToken) extraLines.push('⚡ **Skip token used** — cooldown bypassed!');
     if (queuePosition > 1) extraLines.push(`📊 **Queue position:** #${queuePosition}`);
 
     if (ticketChannel) {
@@ -284,9 +267,9 @@ import {
         buyerId: interaction.user.id,
         ticketChannelId: ticketChannel.id,
       }, availableActivators).catch(() => {});
-      return { ok: true, channel: ticketChannel, queuePosition, usedSkipToken };
+      return { ok: true, channel: ticketChannel, queuePosition };
     }
-    return { ok: true, message: msg, queuePosition, usedSkipToken };
+    return { ok: true, message: msg, queuePosition };
   }
 
 /**
