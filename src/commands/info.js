@@ -20,8 +20,8 @@ export async function execute(interaction) {
     .setColor(0x5865F2)
     .setTitle('🎮 Welcome to DenuBrew — Denuvo Activation Service')
     .setDescription([
-      '**DenuBrew** provides Denuvo DRM activation tokens for your legitimately owned Steam games.',
-      'Our verified activator team handles everything — you just provide the game and follow the steps.',
+      '**DenuBrew** provides Denuvo DRM activation tokens for protected Steam games.',
+      'Our verified activator team handles everything — you just sit back and wait for your code.',
       '',
       '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
       '',
