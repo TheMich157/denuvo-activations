@@ -514,13 +514,16 @@ async function handleManifestRequest(message) {
       await clearLoading();
 
       if (result.type === 'file') {
-        const sizeKb = (result.buffer.length / 1024).toFixed(1);
+        const sizeLabel = `${(result.buffer.length / 1024 / 1024).toFixed(2)} MB`;
         const attachment = new AttachmentBuilder(result.buffer, { name: result.filename });
         const embed = buildGameEmbed(storeInfo, 0x57f287, '✅ Manifest Ready');
         embed.addFields(
           { name: '📁 File', value: `\`${result.filename}\``, inline: true },
-          { name: '📏 Size', value: `${sizeKb} KB`, inline: true },
+          { name: '📏 Size', value: sizeLabel, inline: true },
         );
+        if (result.compressed) {
+          embed.addFields({ name: '🗜️ Note', value: 'File was compressed (`.gz`) to fit Discord limits. Extract with 7-Zip or `gzip -d`.', inline: false });
+        }
         await pendingMsg.edit({ embeds: [embed], files: [attachment] });
       } else {
         const jsonStr = JSON.stringify(result.data, null, 2);

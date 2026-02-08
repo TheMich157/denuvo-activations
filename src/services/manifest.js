@@ -1,10 +1,14 @@
 import { config } from '../config.js';
+import { gzipSync, gunzipSync } from 'zlib';
+import https from 'https';
 
 const BASE_URL = 'https://generator.ryuu.lol/secure_download';
 const LUA_BASE_URL = 'https://generator.ryuu.lol/resellerlua';
 const STEAM_STORE_API = 'https://store.steampowered.com/api/appdetails';
-const FETCH_TIMEOUT_MS = 30_000;
+const FETCH_TIMEOUT_MS = 90_000;
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB Discord file limit
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [2000, 5000, 10000]; // ms
 
 // Manifest result cache (avoids hitting Ryuu API for repeated requests)
 const manifestCache = new Map();
@@ -63,9 +67,115 @@ export async function fetchSteamStoreInfo(appId) {
 }
 
 /**
+ * Raw HTTPS streaming download — bypasses fetch() body size limits.
+ * Collects the full response into a Buffer by streaming chunks.
+ */
+function httpsDownload(url, timeoutMs = FETCH_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, {
+      headers: {
+        'User-Agent': 'DenuvoActivationsBot/1.0',
+        'Accept-Encoding': 'gzip, deflate',
+      },
+    }, (res) => {
+      // Follow redirects (3xx)
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        req.destroy();
+        return httpsDownload(res.headers.location, timeoutMs).then(resolve, reject);
+      }
+
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        resolve({
+          statusCode: res.statusCode,
+          headers: res.headers,
+          buffer: Buffer.concat(chunks),
+        });
+      });
+      res.on('error', reject);
+    });
+
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      reject(new Error(`Request timed out after ${timeoutMs / 1000}s`));
+    });
+  });
+}
+
+/** Determine if an error/status is retryable. */
+function isRetryable(statusCode, errMsg) {
+  if (!statusCode) return true; // network error
+  if (statusCode === 413) return true; // entity too large — retry with streaming
+  if (statusCode === 429) return true; // rate limited
+  if (statusCode >= 500) return true; // server error
+  if (errMsg && /timeout|ECONNRESET|ETIMEDOUT|socket hang up/i.test(errMsg)) return true;
+  return false;
+}
+
+/** Sleep helper. */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Parse the raw response from either fetch or httpsDownload into a manifest result.
+ */
+function parseManifestResponse(statusCode, headers, buffer, id) {
+  const contentType = headers['content-type'] || '';
+  const contentEncoding = (headers['content-encoding'] || '').toLowerCase();
+
+  // Decompress if server sent gzip/deflate
+  let buf = buffer;
+  if (contentEncoding === 'gzip' || contentEncoding === 'deflate') {
+    try { buf = gunzipSync(buf); } catch {}
+  }
+
+  // If JSON response, return parsed data
+  if (contentType.includes('application/json')) {
+    const text = buf.toString('utf-8');
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error(`Invalid JSON response from API.`); }
+    if (data.error) {
+      if (String(data.error).toLowerCase().includes('too large')) {
+        return null; // signal to retry with streaming
+      }
+      throw new Error(data.error);
+    }
+    return { type: 'json', data };
+  }
+
+  if (buf.length === 0) {
+    throw new Error('API returned an empty file. The manifest may not be available for this game.');
+  }
+
+  // Binary file — compress if needed for Discord
+  let compressed = false;
+  if (buf.length > MAX_FILE_SIZE) {
+    const gzipped = gzipSync(buf, { level: 9 });
+    if (gzipped.length <= MAX_FILE_SIZE) {
+      buf = gzipped;
+      compressed = true;
+    } else {
+      throw new Error(`Manifest file is too large even after compression (${(gzipped.length / 1024 / 1024).toFixed(1)} MB). Discord limit is 25 MB.`);
+    }
+  }
+
+  // Extract filename
+  const contentDisposition = headers['content-disposition'] || '';
+  let filename = `manifest_${id}.manifest`;
+  const match = contentDisposition.match(/filename="?([^";\n]+)"?/i);
+  if (match) filename = match[1].trim();
+  if (compressed) filename += '.gz';
+
+  return { type: 'file', buffer: buf, filename, compressed };
+}
+
+/**
  * Fetch a game manifest from the Ryuu API.
+ * Uses fetch() first, falls back to raw HTTPS streaming for large files.
+ * Retries up to MAX_RETRIES times on transient failures.
  * @param {string|number} appId - Steam app ID
- * @returns {Promise<{ type: 'file', buffer: Buffer, filename: string } | { type: 'json', data: object }>}
+ * @returns {Promise<{ type: 'file', buffer: Buffer, filename: string, compressed?: boolean } | { type: 'json', data: object }>}
  */
 export async function fetchManifest(appId) {
   if (!config.ryuuApiKey) {
@@ -82,63 +192,98 @@ export async function fetchManifest(appId) {
   if (cached && Date.now() - cached.ts < MANIFEST_CACHE_TTL) return cached.data;
 
   const url = `${BASE_URL}?appid=${id}&auth_code=${encodeURIComponent(config.ryuuApiKey)}`;
+  let lastError = null;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-  let response;
-  try {
-    response = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'DenuvoActivationsBot/1.0' },
-    });
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      throw new Error(`Request timed out after ${FETCH_TIMEOUT_MS / 1000}s. The API may be slow or unreachable.`);
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await sleep(RETRY_DELAYS[Math.min(attempt - 1, RETRY_DELAYS.length - 1)]);
     }
-    throw new Error(`Network error: ${err.message}`);
-  } finally {
-    clearTimeout(timeout);
+
+    try {
+      let statusCode, headers, buffer;
+
+      if (attempt < 2) {
+        // First two attempts: use fetch()
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+        try {
+          const response = await fetch(url, {
+            signal: controller.signal,
+            headers: {
+              'User-Agent': 'DenuvoActivationsBot/1.0',
+              'Accept-Encoding': 'gzip, deflate, br',
+            },
+          });
+          statusCode = response.status;
+          // Normalize headers to plain object
+          headers = {};
+          response.headers.forEach((v, k) => { headers[k] = v; });
+          buffer = Buffer.from(await response.arrayBuffer());
+        } catch (err) {
+          clearTimeout(timeout);
+          if (err.name === 'AbortError') {
+            lastError = new Error(`Request timed out after ${FETCH_TIMEOUT_MS / 1000}s.`);
+          } else {
+            lastError = new Error(`Network error: ${err.message}`);
+          }
+          if (isRetryable(null, err.message)) continue;
+          throw lastError;
+        } finally {
+          clearTimeout(timeout);
+        }
+      } else {
+        // Later attempts: use raw HTTPS streaming (bypasses fetch body limits)
+        try {
+          const res = await httpsDownload(url, FETCH_TIMEOUT_MS);
+          statusCode = res.statusCode;
+          headers = res.headers;
+          buffer = res.buffer;
+        } catch (err) {
+          lastError = new Error(`Stream download failed: ${err.message}`);
+          if (isRetryable(null, err.message)) continue;
+          throw lastError;
+        }
+      }
+
+      // Handle error status codes
+      if (statusCode === 404) throw new Error(`No manifest found for App ID **${id}**. The game may not exist or is not supported.`);
+      if (statusCode === 401 || statusCode === 403) throw new Error('Authentication failed — check RYUU_API_KEY.');
+
+      if (statusCode !== 200 && isRetryable(statusCode)) {
+        const bodyText = buffer.toString('utf-8').slice(0, 200);
+        lastError = new Error(`API error ${statusCode}: ${bodyText}`);
+        continue;
+      }
+
+      if (statusCode !== 200) {
+        const bodyText = buffer.toString('utf-8').slice(0, 200);
+        throw new Error(`API error ${statusCode}: ${bodyText}`);
+      }
+
+      // Parse the successful response
+      const result = parseManifestResponse(statusCode, headers, buffer, id);
+      if (result === null) {
+        // JSON "too large" error — retry with streaming
+        lastError = new Error('API reported manifest too large');
+        continue;
+      }
+
+      manifestCache.set(id, { data: result, ts: Date.now() });
+      return result;
+
+    } catch (err) {
+      // Non-retryable errors bubble up immediately
+      if (err.message.includes('not found') || err.message.includes('Authentication') ||
+          err.message.includes('Discord limit') || err.message.includes('not configured') ||
+          err.message.includes('Invalid App ID')) {
+        throw err;
+      }
+      lastError = err;
+      if (!isRetryable(null, err.message)) throw err;
+    }
   }
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    if (response.status === 404) throw new Error(`No manifest found for App ID **${id}**. The game may not exist or is not supported.`);
-    if (response.status === 401 || response.status === 403) throw new Error('Authentication failed — check RYUU_API_KEY.');
-    if (response.status === 429) throw new Error('Rate limited by the API. Please try again later.');
-    throw new Error(`API error ${response.status}: ${text || response.statusText}`);
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-
-  // If JSON response, return parsed data
-  if (contentType.includes('application/json')) {
-    const data = await response.json();
-    if (data.error) throw new Error(data.error);
-    const result = { type: 'json', data };
-    manifestCache.set(id, { data: result, ts: Date.now() });
-    return result;
-  }
-
-  // Otherwise treat as binary file download
-  const buffer = Buffer.from(await response.arrayBuffer());
-
-  if (buffer.length === 0) {
-    throw new Error('API returned an empty file. The manifest may not be available for this game.');
-  }
-  if (buffer.length > MAX_FILE_SIZE) {
-    throw new Error(`Manifest file is too large (${(buffer.length / 1024 / 1024).toFixed(1)} MB). Discord limit is 25 MB.`);
-  }
-
-  // Try to extract filename from content-disposition header
-  const contentDisposition = response.headers.get('content-disposition') || '';
-  let filename = `manifest_${id}.manifest`;
-  const match = contentDisposition.match(/filename="?([^";\n]+)"?/i);
-  if (match) filename = match[1].trim();
-
-  const result = { type: 'file', buffer, filename };
-  manifestCache.set(id, { data: result, ts: Date.now() });
-  return result;
+  throw lastError || new Error(`Failed to fetch manifest for App ID **${id}** after ${MAX_RETRIES + 1} attempts.`);
 }
 
 /**
