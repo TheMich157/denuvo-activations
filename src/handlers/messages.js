@@ -495,9 +495,24 @@ async function handleManifestRequest(message) {
     // Check if this game requires Denuvo activation (exists in list.json)
     const denuvoGame = getGameByAppId(parseInt(appId, 10));
 
+    // Helper: send Denuvo warning before the manifest embed
+    const sendDenuvoWarning = async () => {
+      if (!denuvoGame) return;
+      const warnEmbed = new EmbedBuilder()
+        .setColor(0xfee75c)
+        .setTitle('⚠️ Denuvo Activation Required')
+        .setDescription(
+          `**${getGameDisplayName(denuvoGame)}** uses **Denuvo DRM** and will not work without an activation.\n\n` +
+          `Head over to <#1469390899162382510> to request an activation code.`
+        )
+        .setTimestamp();
+      await message.channel.send({ embeds: [warnEmbed] });
+    };
+
     if (isLua) {
       const [{ script }, storeInfo] = await Promise.all([fetchLuaManifest(appId), storeInfoPromise]);
       await clearLoading();
+      await sendDenuvoWarning();
 
       if (script.length <= 1500) {
         const embed = buildGameEmbed(storeInfo, 0x57f287, '✅ Lua Manifest Ready');
@@ -512,6 +527,7 @@ async function handleManifestRequest(message) {
     } else {
       const [result, storeInfo] = await Promise.all([fetchManifest(appId), storeInfoPromise]);
       await clearLoading();
+      await sendDenuvoWarning();
 
       if (result.type === 'file') {
         const sizeLabel = `${(result.buffer.length / 1024 / 1024).toFixed(2)} MB`;
@@ -540,19 +556,32 @@ async function handleManifestRequest(message) {
       }
     }
 
-    // If the game is in list.json, warn that it requires Denuvo activation
-    if (denuvoGame) {
-      const warnEmbed = new EmbedBuilder()
-        .setColor(0xfee75c)
-        .setTitle('⚠️ Denuvo Activation Required')
-        .setDescription(
-          `**${getGameDisplayName(denuvoGame)}** uses **Denuvo DRM** and will not work without an activation.\n\n` +
-          `Head over to <#1469390899162382510> to request an activation code.`
-        )
-        .setTimestamp();
-      await message.channel.send({ embeds: [warnEmbed] });
-    }
   } catch (err) {
+    const errMsg = err.message || 'Unknown error';
+    const isTooLarge = /too large|entity too large|413/i.test(errMsg);
+
+    // If manifest is too large, try Lua fallback (Lua scripts are much smaller)
+    if (isTooLarge && !isLua) {
+      try {
+        const [{ script }, storeInfo] = await Promise.all([fetchLuaManifest(appId), storeInfoPromise]);
+        await clearLoading();
+        await sendDenuvoWarning();
+
+        const attachment = new AttachmentBuilder(Buffer.from(script, 'utf-8'), { name: `manifest_${appId}.lua` });
+        const embed = buildGameEmbed(storeInfo, 0xfee75c, '⚠️ Manifest Too Large — Lua Fallback');
+        embed.addFields(
+          { name: '📜 File', value: `\`manifest_${appId}.lua\``, inline: true },
+          { name: '📏 Size', value: `${(Buffer.byteLength(script) / 1024 / 1024).toFixed(2)} MB`, inline: true },
+          { name: '💡 Note', value: 'The `.manifest` file was too large for the API. A `.lua` script has been provided instead.\nPlace it in `Steam\\config\\stplug-in`.', inline: false },
+          { name: '🔗 Manual Download', value: `[Download from Ryuu Generator](https://generator.ryuu.lol/) — search for App ID \`${appId}\``, inline: false },
+        );
+        await pendingMsg.edit({ embeds: [embed], files: [attachment] });
+        return true;
+      } catch {
+        // Lua fallback also failed — fall through to error embed
+      }
+    }
+
     await message.reactions.cache.get('📦')?.users?.remove(message.client.user.id).catch(() => {});
     await message.react('❌').catch(() => {});
 
@@ -567,7 +596,14 @@ async function handleManifestRequest(message) {
     } else {
       errorEmbed.setDescription(`Could not fetch ${modeLabel} for App ID **${appId}**.`);
     }
-    errorEmbed.addFields({ name: 'Error', value: err.message || 'Unknown error', inline: false });
+    errorEmbed.addFields({ name: 'Error', value: errMsg, inline: false });
+    if (isTooLarge) {
+      errorEmbed.addFields({
+        name: '🔗 Manual Download',
+        value: `This manifest is too large for the API. Download it directly from [Ryuu Generator](https://generator.ryuu.lol/) — search for App ID \`${appId}\`.`,
+        inline: false,
+      });
+    }
     errorEmbed.setFooter({ text: 'Check the App ID and try again' });
     await pendingMsg.edit({ embeds: [errorEmbed] });
   }
