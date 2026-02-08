@@ -83,7 +83,7 @@ export function buildPanelMessagePayload() {
     // Per-game breakdown
     for (const g of perGame) {
       const game = getGameByAppId(g.gameAppId);
-      const name = game ? getGameDisplayName(game) : `App ${g.gameAppId}`;
+      const name = game ? getGameDisplayName(game) : (g.dbGameName || `App ${g.gameAppId}`);
       const ts = Math.floor(new Date(g.nextAt + 'Z').getTime() / 1000);
       lines.push(`⏳ **${name}** — +${g.pending} slot${g.pending > 1 ? 's' : ''} <t:${ts}:R>`);
     }

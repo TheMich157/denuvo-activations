@@ -14,6 +14,31 @@ if (!existsSync(sessionsDir)) {
 
 const log = debug('drm');
 
+/** Custom error class for DRM flow failures with step-level diagnostics. */
+export class DrmError extends Error {
+  constructor(message, { step, url, status, cookieDomains, bodySnippet, cause } = {}) {
+    super(message);
+    this.name = 'DrmError';
+    this.step = step || 'unknown';
+    this.diagnosticUrl = url || null;
+    this.httpStatus = status || null;
+    this.cookieDomains = cookieDomains || null;
+    this.bodySnippet = bodySnippet || null;
+    if (cause) this.cause = cause;
+  }
+
+  /** Build a concise diagnostic string for logging. */
+  toDiagnostic() {
+    const parts = [`[DrmError] step=${this.step}`];
+    if (this.diagnosticUrl) parts.push(`url=${this.diagnosticUrl}`);
+    if (this.httpStatus) parts.push(`status=${this.httpStatus}`);
+    if (this.cookieDomains) parts.push(`cookies=[${this.cookieDomains}]`);
+    if (this.bodySnippet) parts.push(`body=${this.bodySnippet}`);
+    parts.push(`msg=${this.message}`);
+    return parts.join(' | ');
+  }
+}
+
 const MIN_CODE_LENGTH = 6;
 // The final auth code is exactly 6 alphanumeric characters (digits + letters)
 const AUTH_CODE_REGEX = /\b[A-Za-z0-9]{6}\b/;
@@ -450,6 +475,7 @@ async function drmLogin(steamCookieStrings) {
     log('drmLogin: no login link → already logged in');
     return jar;
   }
+  log('drmLogin: login link found →', loginHref);
 
   // 2. Follow the login link (drm → steam_login.php → steamcommunity.com/…)
   const loginUrl = new URL(loginHref, drmConfig.baseUrl).href;
@@ -489,6 +515,7 @@ async function drmLogin(steamCookieStrings) {
   // 3. We're on Steam (usually /login/home/ which is JS-only).
   //    Extract the real OpenID endpoint URL from the nested goto params.
   log('drmLogin: on Steam page →', loginRes.url);
+  log('drmLogin: Steam page title:', cheerio.load(loginRes.body)('title').text().trim());
   log('drmLogin: Steam page body snippet:', snippet(loginRes.body));
 
   let openIdUrl = extractOpenIdUrl(loginRes.url);
@@ -555,12 +582,40 @@ async function drmLogin(steamCookieStrings) {
     return jar;
   }
 
+  // Gather diagnostics for the error
+  const cookieDomains = Object.keys(jar.cookies).join(', ');
+  const steamCookieNames = Object.entries(jar.cookies)
+    .filter(([d]) => d.includes('steam'))
+    .map(([d, c]) => `${d}=[${Object.keys(c).join(',')}]`).join(' ');
+  const lastPathname = lastOpenIdUrl ? new URL(lastOpenIdUrl).pathname : 'N/A';
+  const recheckBody = snippet(cheerio.load(recheck.body)('body').text(), 200);
+
   log('drmLogin: FAILED — last OpenID url:', lastOpenIdUrl, '| status:', lastOpenIdStatus);
-  log('drmLogin: FAILED — cookie domains:', Object.keys(jar.cookies).join(', '));
-  throw new Error(
-    'Could not authenticate with drm.steam.run via Steam OpenID.' +
-    (lastOpenIdUrl ? ` (Steam landed on ${new URL(lastOpenIdUrl).pathname})` : '') +
-    ' Try using **Done** to paste the code manually.'
+  log('drmLogin: FAILED — cookie domains:', cookieDomains);
+  log('drmLogin: FAILED — steam cookies:', steamCookieNames);
+  log('drmLogin: FAILED — recheck body:', recheckBody);
+
+  // Determine specific failure reason
+  let reason;
+  if (lastOpenIdUrl && lastPathname.includes('/login')) {
+    reason = 'Steam cookies were not accepted — OpenID redirected to login page instead of approving.';
+  } else if (lastOpenIdUrl && lastOpenIdStatus && lastOpenIdStatus >= 400) {
+    reason = `Steam OpenID returned HTTP ${lastOpenIdStatus} at ${lastPathname}.`;
+  } else if (!lastOpenIdUrl) {
+    reason = 'Could not find or reach the Steam OpenID endpoint.';
+  } else {
+    reason = `Steam OpenID flow ended at ${lastPathname} without redirecting back to drm.steam.run.`;
+  }
+
+  throw new DrmError(
+    `Could not authenticate with drm.steam.run. ${reason}`,
+    {
+      step: 'drmLogin:openid',
+      url: lastOpenIdUrl,
+      status: lastOpenIdStatus,
+      cookieDomains,
+      bodySnippet: recheckBody,
+    }
   );
 }
 
@@ -806,8 +861,12 @@ async function drmExtractCode(jar, gameAppId) {
   }
 
   if (!gameInput) {
-    log('step4: FAILED — page text:', snippet($('body').text(), 500));
-    throw new Error('Could not find Game ID input on drm.steam.run. Use **Done** to paste the code manually.');
+    const pageText = snippet($('body').text(), 500);
+    log('step4: FAILED — page text:', pageText);
+    throw new DrmError(
+      'Could not find Game ID input on drm.steam.run.',
+      { step: 'drmExtractCode:step4-gameInput', url, bodySnippet: snippet($('body').text(), 200) }
+    );
   }
 
   const inputName = gameInput.attr('name') || 'appid';
@@ -967,20 +1026,17 @@ async function drmExtractCode(jar, gameAppId) {
     }
   }
 
-  log('FAILED — page text:', snippet($('body').text(), 500));
-  throw new Error('Could not extract authorization code. The site may have changed. Use **Done** to paste the code from drm.steam.run manually.');
+  const failPageText = snippet($('body').text(), 500);
+  log('FAILED — page text:', failPageText);
+  throw new DrmError(
+    'Could not extract authorization code. The site may have changed.',
+    { step: 'drmExtractCode:final', url, bodySnippet: snippet($('body').text(), 200) }
+  );
 }
 
-/**
- * AI-assisted extraction: sends the page structure to Groq LLM to identify
- * the auth code or determine the next action to take.
- */
-async function aiAssistExtraction($, pageUrl, jar, appIdStr) {
-  const cheerio = await import('cheerio');
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) return null;
-
-  const pageText = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 2000);
+/** Describe the current page state for the AI agent. */
+function describePageForAI($, pageUrl) {
+  const pageText = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 3000);
   const forms = [];
   $('form').each(function (i) {
     const action = $(this).attr('action') || '';
@@ -990,8 +1046,8 @@ async function aiAssistExtraction($, pageUrl, jar, appIdStr) {
       const tag = this.tagName;
       const name = $(this).attr('name') || '';
       const type = $(this).attr('type') || '';
-      const value = ($(this).val() || '').slice(0, 50);
-      const text = ($(this).text() || '').trim().slice(0, 50);
+      const value = ($(this).val() || '').slice(0, 80);
+      const text = ($(this).text() || '').trim().slice(0, 80);
       inputs.push(`<${tag} name="${name}" type="${type}" value="${value}"${text ? ` text="${text}"` : ''}>`);
     });
     forms.push(`Form[${i}] action="${action}" method="${method}":\n  ${inputs.join('\n  ')}`);
@@ -999,30 +1055,21 @@ async function aiAssistExtraction($, pageUrl, jar, appIdStr) {
   const links = [];
   $('a[href]').each(function () {
     const href = $(this).attr('href') || '';
-    const text = ($(this).text() || '').trim().slice(0, 60);
+    const text = ($(this).text() || '').trim().slice(0, 80);
     if (href && href !== '#' && text) links.push(`[${text}](${href})`);
   });
+  const buttons = [];
+  $('button, input[type="submit"], [role="button"]').each(function () {
+    const text = ($(this).text() || $(this).val() || '').trim().slice(0, 80);
+    if (text) buttons.push(text);
+  });
+  return { pageText, forms, links: links.slice(0, 25), buttons };
+}
 
-  const prompt = `You are analyzing drm.steam.run, a Steam DRM authorization code generation site.
-Goal: generate a 6-character alphanumeric authorization code for Steam App ID ${appIdStr}.
-
-The site flow is: Login → Authorization Code Generation → Extract Authorization → Input Game ID → Start Extraction → Read GameId/SteamId/BillData → Fill form → Submit → Get 6-char code.
-
-Current page URL: ${pageUrl}
-Page text: ${pageText}
-
-Forms: ${forms.join('\n\n') || '(none)'}
-Links: ${links.slice(0, 15).join('\n') || '(none)'}
-
-What should we do? Respond with EXACTLY one of:
-- CODE: <6_char_code> (if the code is visible)
-- SUBMIT_FORM: <0-based_index> (if a form needs submitting)
-- FOLLOW_LINK: <href> (if we need to navigate)
-- CLICK_BUTTON: <exact_button_text> (if we need to click something)
-- UNKNOWN (if you can't determine)`;
-
+/** Call Groq LLM and return the response text. */
+async function askAI(apiKey, messages) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), 20000);
   try {
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -1030,52 +1077,197 @@ What should we do? Respond with EXACTLY one of:
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
         model: process.env.GROQ_MODEL?.trim() || 'meta-llama/llama-4-scout-17b-16e-instruct',
-        max_tokens: 200,
+        max_tokens: 300,
         temperature: 0,
-        messages: [{ role: 'user', content: prompt }],
+        messages,
       }),
     });
     if (!res.ok) { log('AI: Groq error', res.status); return null; }
     const data = await res.json();
-    const answer = (data.choices?.[0]?.message?.content || '').trim();
-    log('AI answer:', answer);
-
-    if (answer.startsWith('CODE:')) {
-      const code = answer.slice(5).trim();
-      if (code.length >= MIN_CODE_LENGTH) return code;
-    }
-    if (answer.startsWith('SUBMIT_FORM:')) {
-      const idx = parseInt(answer.slice(12).trim(), 10);
-      const formEls = $('form').toArray();
-      if (formEls[idx]) {
-        const f = $(formEls[idx]);
-        const { action, params } = serializeForm($, f, pageUrl);
-        for (const [key] of params) { if (/app|game|id/i.test(key)) params.set(key, appIdStr); }
-        const fRes = await httpPost(action, params, jar);
-        return findCodeInPage(cheerio.load(fRes.body));
-      }
-    }
-    if (answer.startsWith('FOLLOW_LINK:')) {
-      const href = answer.slice(12).trim();
-      try {
-        const linkRes = await httpGet(new URL(href, pageUrl).href, jar);
-        return findCodeInPage(cheerio.load(linkRes.body));
-      } catch {}
-    }
-    if (answer.startsWith('CLICK_BUTTON:')) {
-      const btnText = answer.slice(13).trim();
-      const b = findClickable($, [btnText]);
-      if (b) {
-        const r = await clickEl($, b, jar, pageUrl, { appid: appIdStr });
-        if (r) return findCodeInPage(r.$);
-      }
-    }
+    return (data.choices?.[0]?.message?.content || '').trim();
   } catch (e) {
     log('AI request error:', e?.message);
+    return null;
   } finally {
     clearTimeout(timeout);
   }
-  return null;
+}
+
+const AI_SYSTEM_PROMPT = `You are an autonomous web navigation agent for drm.steam.run, a Steam DRM authorization code generation site.
+Your goal: navigate the site to generate a 6-character alphanumeric authorization code for a given Steam App ID.
+
+The typical site flow is:
+1. Dashboard → click "Authorization Code Generation"
+2. Click "Extract Authorization"
+3. Enter Game/App ID in the input field → click "Start Extraction"
+4. Read extracted data (GameId, SteamId, BillData)
+5. Fill the authorization form (or click "Fill Info") → Submit
+6. Read the 6-character code from the result
+
+You will be shown the current page state (URL, text, forms, links, buttons).
+Respond with EXACTLY ONE action per message:
+- CODE: <the_code> — if you can see the final 6-char alphanumeric auth code on the page
+- SUBMIT_FORM: <index> [field=value, field=value] — submit form by 0-based index, optionally setting field values
+- FOLLOW_LINK: <href> — navigate to a link
+- CLICK_BUTTON: <exact_button_text> — click a button by its visible text
+- FILL_AND_SUBMIT: <form_index> <field_name>=<value> [field_name=value ...] — fill specific fields then submit
+- GIVE_UP: <reason> — if you're stuck and can't proceed
+
+Important:
+- Always fill app/game ID fields with the target App ID when submitting forms
+- Look for the code in page text, form values, data attributes, or result sections
+- The code is exactly 6 alphanumeric characters (letters and digits)
+- If you see extraction results (GameId, SteamId, BillData), look for a form to fill them into
+- Be decisive — pick the most promising action`;
+
+/**
+ * Multi-step AI agent that autonomously navigates drm.steam.run to extract an auth code.
+ * Runs up to MAX_AI_STEPS iterations, each time analyzing the page and deciding the next action.
+ */
+const MAX_AI_STEPS = 10;
+
+async function aiAssistExtraction($, pageUrl, jar, appIdStr) {
+  const cheerio = await import('cheerio');
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return null;
+
+  let currentUrl = pageUrl;
+  let current$ = $;
+  const conversationHistory = [{ role: 'system', content: AI_SYSTEM_PROMPT }];
+
+  for (let step = 0; step < MAX_AI_STEPS; step++) {
+    // Check for code on current page before asking AI
+    const immediateCode = findCodeInPage(current$);
+    if (immediateCode) {
+      log(`AI step ${step}: code found on page before asking AI`);
+      return immediateCode;
+    }
+
+    const { pageText, forms, links, buttons } = describePageForAI(current$, currentUrl);
+    const userMsg = [
+      `Step ${step + 1}/${MAX_AI_STEPS} — Target App ID: ${appIdStr}`,
+      `URL: ${currentUrl}`,
+      `Page text: ${pageText.slice(0, 2500)}`,
+      '',
+      forms.length ? `Forms:\n${forms.join('\n\n')}` : 'Forms: (none)',
+      '',
+      links.length ? `Links:\n${links.join('\n')}` : 'Links: (none)',
+      '',
+      buttons.length ? `Buttons: ${buttons.join(' | ')}` : 'Buttons: (none)',
+    ].join('\n');
+
+    conversationHistory.push({ role: 'user', content: userMsg });
+    log(`AI step ${step}: asking AI (url=${currentUrl})`);
+
+    const answer = await askAI(apiKey, conversationHistory);
+    if (!answer) { log(`AI step ${step}: no response`); break; }
+    log(`AI step ${step}: answer = ${answer}`);
+    conversationHistory.push({ role: 'assistant', content: answer });
+
+    // Parse action
+    try {
+      if (answer.startsWith('CODE:')) {
+        const code = answer.slice(5).trim().replace(/[^A-Za-z0-9]/g, '');
+        if (code.length >= MIN_CODE_LENGTH) {
+          log(`AI step ${step}: extracted code`);
+          return code;
+        }
+      }
+
+      if (answer.startsWith('GIVE_UP:')) {
+        log(`AI step ${step}: gave up — ${answer.slice(8).trim()}`);
+        break;
+      }
+
+      if (answer.startsWith('SUBMIT_FORM:')) {
+        const rest = answer.slice(12).trim();
+        const idxMatch = rest.match(/^(\d+)/);
+        if (!idxMatch) continue;
+        const idx = parseInt(idxMatch[1], 10);
+        const formEls = current$('form').toArray();
+        if (!formEls[idx]) { log(`AI step ${step}: form index ${idx} not found`); continue; }
+        const f = current$(formEls[idx]);
+        const { action, params } = serializeForm(current$, f, currentUrl);
+        // Auto-fill app ID fields
+        for (const [key] of params) {
+          if (/app|game|id/i.test(key) && !params.get(key)) params.set(key, appIdStr);
+        }
+        // Parse optional field overrides: [field=value, field=value]
+        const overrides = rest.match(/\[([^\]]+)\]/);
+        if (overrides) {
+          for (const pair of overrides[1].split(',')) {
+            const [k, ...vParts] = pair.split('=');
+            if (k?.trim() && vParts.length) params.set(k.trim(), vParts.join('=').trim());
+          }
+        }
+        log(`AI step ${step}: submitting form ${idx} → ${action}`);
+        const fRes = await httpPost(action, params, jar);
+        current$ = cheerio.load(fRes.body);
+        currentUrl = fRes.url;
+        continue;
+      }
+
+      if (answer.startsWith('FILL_AND_SUBMIT:')) {
+        const rest = answer.slice(16).trim();
+        const idxMatch = rest.match(/^(\d+)/);
+        if (!idxMatch) continue;
+        const idx = parseInt(idxMatch[1], 10);
+        const formEls = current$('form').toArray();
+        if (!formEls[idx]) continue;
+        const f = current$(formEls[idx]);
+        const { action, params } = serializeForm(current$, f, currentUrl);
+        // Parse field=value pairs
+        const pairs = rest.slice(idxMatch[0].length).trim().split(/\s+/);
+        for (const pair of pairs) {
+          const eq = pair.indexOf('=');
+          if (eq > 0) params.set(pair.slice(0, eq), pair.slice(eq + 1));
+        }
+        // Auto-fill app ID fields
+        for (const [key] of params) {
+          if (/app|game|id/i.test(key) && !params.get(key)) params.set(key, appIdStr);
+        }
+        log(`AI step ${step}: fill+submit form ${idx} → ${action}`);
+        const fRes = await httpPost(action, params, jar);
+        current$ = cheerio.load(fRes.body);
+        currentUrl = fRes.url;
+        continue;
+      }
+
+      if (answer.startsWith('FOLLOW_LINK:')) {
+        const href = answer.slice(12).trim();
+        try {
+          const fullUrl = new URL(href, currentUrl).href;
+          log(`AI step ${step}: following link → ${fullUrl}`);
+          const linkRes = await httpGet(fullUrl, jar);
+          current$ = cheerio.load(linkRes.body);
+          currentUrl = linkRes.url;
+        } catch (e) {
+          log(`AI step ${step}: link error: ${e?.message}`);
+        }
+        continue;
+      }
+
+      if (answer.startsWith('CLICK_BUTTON:')) {
+        const btnText = answer.slice(13).trim();
+        const b = findClickable(current$, [btnText]);
+        if (b) {
+          log(`AI step ${step}: clicking "${btnText}"`);
+          const r = await clickEl(current$, b, jar, currentUrl, { appid: appIdStr });
+          if (r) { current$ = r.$; currentUrl = r.url; }
+        } else {
+          log(`AI step ${step}: button "${btnText}" not found`);
+        }
+        continue;
+      }
+
+      log(`AI step ${step}: unrecognized action`);
+    } catch (e) {
+      log(`AI step ${step}: action error: ${e?.message}`);
+    }
+  }
+
+  // Final check
+  return findCodeInPage(current$);
 }
 
 /* ---------- retry wrapper ---------- */
@@ -1232,7 +1424,18 @@ export async function generateAuthCode(gameAppId, credentials, confirmCode = nul
   try {
     jar = await drmLogin(steamCookies);
   } catch (err) {
-    throw new Error(`Could not login to drm.steam.run. ${err?.message || 'Unknown error'}`);
+    if (err instanceof DrmError) {
+      log('generateAuthCode: DRM login failed:', err.toDiagnostic());
+      throw new DrmError(
+        `Could not login to drm.steam.run. ${err.message}`,
+        { ...err, step: `generateAuthCode>${err.step}`, cause: err }
+      );
+    }
+    log('generateAuthCode: DRM login failed (generic):', err?.message);
+    throw new DrmError(
+      `Could not login to drm.steam.run. ${err?.message || 'Unknown error'}`,
+      { step: 'generateAuthCode:drmLogin', cause: err }
+    );
   }
 
   // 5. Extract the code

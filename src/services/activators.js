@@ -3,6 +3,7 @@ import { encrypt, decrypt } from '../utils/crypto.js';
 import { config } from '../config.js';
 import { isValidDiscordId, isValidAppId } from '../utils/validate.js';
 import { isAway } from './activatorStatus.js';
+import { getGameByAppId } from '../utils/games.js';
 
 export function addActivatorGame(activatorId, gameAppId, gameName, method, credentials = null, stockQuantity = 5, credsViewable = false) {
   if (!isValidDiscordId(activatorId) || !isValidAppId(gameAppId)) throw new Error('Invalid activator or game ID');
@@ -255,6 +256,16 @@ export function cleanupOldData() {
       AND id NOT IN (SELECT DISTINCT activator_id FROM activator_games)
       AND id NOT IN (SELECT DISTINCT user_id FROM point_transactions)
   `).run();
+
+  // Remove activator_games and restock queue entries for games no longer in list.json
+  const dbAppIds = db.prepare('SELECT DISTINCT game_app_id FROM activator_games').all();
+  const staleIds = dbAppIds.filter(r => !getGameByAppId(r.game_app_id)).map(r => r.game_app_id);
+  if (staleIds.length > 0) {
+    for (const appId of staleIds) {
+      db.prepare('DELETE FROM activator_games WHERE game_app_id = ?').run(appId);
+      db.prepare('DELETE FROM stock_restock_queue WHERE game_app_id = ?').run(appId);
+    }
+  }
 
   scheduleSave();
 }

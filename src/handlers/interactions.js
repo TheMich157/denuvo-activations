@@ -17,7 +17,7 @@ import { assignIssuer, getRequest, getRequestByChannel, cancelRequest, markScree
 import { saveTranscript } from '../services/transcript.js';
 import { getCredentials } from '../services/activators.js';
 import { setState, clearState } from '../services/screenshotVerify/state.js';
-import { generateAuthCode, generateAuthCodeForRequest } from '../services/drm.js';
+import { generateAuthCode, generateAuthCodeForRequest, DrmError } from '../services/drm.js';
 import { completeAndNotifyTicket } from '../commands/done.js';
 import { handleSelect as panelHandleSelect, handleRefresh as panelHandleRefresh } from '../commands/panelHandler.js';
 import { handleSelect as addHandleSelect, handleModal as addHandleModal } from '../commands/add.js';
@@ -177,6 +177,9 @@ async function handleAutoCodeButton(interaction) {
         ],
       });
     } else {
+      if (err instanceof DrmError) {
+        console.error('[DRM Auto-Code]', err.toDiagnostic());
+      }
       await interaction.editReply({
         content: `❌ **Could not generate code.** ${msg} You can use **Done** to paste the code from drm.steam.run manually.`,
       });
@@ -259,6 +262,9 @@ async function handleAutoCodeModal(interaction) {
     });
   } catch (err) {
     const msg = err?.message || 'Generation failed.';
+    if (err instanceof DrmError) {
+      console.error('[DRM Auto-Code 2FA]', err.toDiagnostic());
+    }
     await interaction.editReply({
       content: `❌ **Could not generate code.** ${msg} You can use **Done** to paste the code from drm.steam.run manually.`,
     });

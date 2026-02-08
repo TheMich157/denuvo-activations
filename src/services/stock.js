@@ -99,8 +99,10 @@ export function getPerGameRestockDetails(limit = 10) {
     SELECT
       q.game_app_id,
       COUNT(*) AS pending,
-      MIN(datetime(q.restock_at)) AS next_at
+      MIN(datetime(q.restock_at)) AS next_at,
+      ag.game_name AS db_game_name
     FROM stock_restock_queue q
+    LEFT JOIN activator_games ag ON ag.game_app_id = q.game_app_id
     WHERE datetime(q.restock_at) > datetime('now')
     GROUP BY q.game_app_id
     ORDER BY next_at ASC
@@ -110,5 +112,6 @@ export function getPerGameRestockDetails(limit = 10) {
     gameAppId: r.game_app_id,
     pending: r.pending,
     nextAt: r.next_at,
+    dbGameName: r.db_game_name || null,
   }));
 }
