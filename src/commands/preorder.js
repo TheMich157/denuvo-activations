@@ -66,8 +66,8 @@ export const data = new SlashCommandBuilder()
       .addIntegerOption((o) => o.setName('id').setDescription('Preorder ID').setRequired(true))
   )
   .addSubcommand((sub) =>
-    sub.setName('removeclaim')
-      .setDescription('Remove a user\'s claim from a preorder')
+    sub.setName('removespot')
+      .setDescription('Remove a user from a claimed spot on a preorder')
       .addIntegerOption((o) => o.setName('id').setDescription('Preorder ID').setRequired(true))
       .addUserOption((o) => o.setName('user').setDescription('User to remove').setRequired(true))
   )
@@ -283,8 +283,8 @@ export async function execute(interaction) {
     await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 
-  /* ───────── REMOVECLAIM ───────── */
-  else if (sub === 'removeclaim') {
+  /* ───────── REMOVESPOT ───────── */
+  else if (sub === 'removespot') {
     const id = interaction.options.getInteger('id');
     const user = interaction.options.getUser('user');
     const preorder = getPreorder(id);

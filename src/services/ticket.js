@@ -243,10 +243,19 @@ import {
     components = [claimRow];
   }
 
+    // Ping: assigned activator if auto-assigned, otherwise activator role
+    let pingContent = null;
+    if (autoAssigned && best) {
+      pingContent = `<@${best.activator_id}>`;
+    } else if (config.activatorRoleId) {
+      pingContent = `<@&${config.activatorRoleId}>`;
+    }
+
     const msg = {
-      content: null,
+      content: pingContent,
       embeds: [mainEmbed],
       components,
+      allowedMentions: { users: autoAssigned && best ? [best.activator_id] : [], roles: config.activatorRoleId ? [config.activatorRoleId] : [] },
     };
   
     // Build extra info line for skip token / queue

@@ -55,14 +55,59 @@ function buildManualVerifyRow(channelId) {
 
 /**
  * Extract text from an image using the available OCR provider.
+ * Uses a specialized Ko-fi tip detection prompt for Groq.
  */
 async function extractTextFromImage(url) {
-  // Try Groq first (LLM-based), fall back to tesseract
+  // Try Groq first with a specialized Ko-fi receipt prompt
+  try {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (apiKey) {
+      const model = process.env.GROQ_MODEL?.trim() || 'meta-llama/llama-4-scout-17b-16e-instruct';
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      try {
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model,
+            max_tokens: 512,
+            temperature: 0,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: `Analyze this screenshot of a payment receipt or donation page. Extract ALL text you can see. Focus especially on:
+- Payment platform (Ko-fi, PayPal, Stripe, etc.)
+- Dollar amounts (e.g. $5.00, 3.20 USD, €4)
+- Words like: donation, tip, coffee, supporter, payment, bought, received, thank you, confirmed, success, complete
+- Any reference numbers or order IDs
+Return ONLY the raw extracted text, no commentary.` },
+                { type: 'image_url', image_url: { url } },
+              ],
+            }],
+          }),
+        });
+        clearTimeout(timeout);
+        if (response.ok) {
+          const data = await response.json();
+          const text = data.choices?.[0]?.message?.content?.trim() || '';
+          if (text) return text;
+        }
+      } catch {
+        clearTimeout(timeout);
+      }
+    }
+  } catch {}
+
+  // Fall back to generic Groq OCR
   try {
     const { extractText: groqExtract } = await import('../services/screenshotVerify/providers/groq.js');
     const result = await groqExtract(url);
     if (!result.error && result.text) return result.text;
   } catch {}
+
+  // Fall back to tesseract
   try {
     const { extractText: tesseractExtract } = await import('../services/screenshotVerify/providers/tesseract.js');
     const result = await tesseractExtract(url);
@@ -94,21 +139,64 @@ function parsePreorderIdFromText(text) {
  */
 function detectKofiPayment(text) {
   const lower = text.toLowerCase();
-  const isKofi = /ko-?fi/i.test(text)
-    || /coffee/i.test(text)
-    || /supporter/i.test(text)
-    || /tip|donation|bought|received|thank/i.test(text);
 
-  // Try to extract dollar amount
+  // Platform detection — broad matching for Ko-fi and other payment platforms
+  const platformPatterns = [
+    /ko[\s-]?fi/i,
+    /kofi/i,
+    /coffee/i,
+    /supporter/i,
+    /buy\s*me\s*a/i,
+  ];
+  const paymentPatterns = [
+    /tip|donation|donat/i,
+    /bought|received|thank/i,
+    /payment|paid|purchase/i,
+    /success|confirmed|complete/i,
+    /receipt|transaction|order/i,
+    /support(?:ed|ing|er)?/i,
+    /contribut/i,
+    /checkout/i,
+    /one[\s-]?time/i,
+  ];
+
+  const isPlatform = platformPatterns.some(p => p.test(text));
+  const isPayment = paymentPatterns.some(p => p.test(text));
+  const isKofi = isPlatform || isPayment;
+
+  // Extract dollar amounts — try many formats
   let amount = null;
-  const amountMatch = text.match(/\$\s*(\d+(?:\.\d{1,2})?)/);
-  if (amountMatch) amount = parseFloat(amountMatch[1]);
+  const amountPatterns = [
+    // $5.00, $ 5.00, $5
+    /\$\s*(\d+(?:\.\d{1,2})?)/,
+    // 5.00 USD, 5 USD, 5.00 usd
+    /(\d+(?:\.\d{1,2})?)\s*(?:USD|usd|dollars?)/i,
+    // USD 5.00, USD5
+    /(?:USD|usd|dollars?)\s*(\d+(?:\.\d{1,2})?)/i,
+    // €5.00, €5
+    /€\s*(\d+(?:\.\d{1,2})?)/,
+    // 5.00 EUR, EUR 5.00
+    /(\d+(?:\.\d{1,2})?)\s*(?:EUR|eur|euros?)/i,
+    /(?:EUR|eur|euros?)\s*(\d+(?:\.\d{1,2})?)/i,
+    // £5.00
+    /£\s*(\d+(?:\.\d{1,2})?)/,
+    // "amount: 5.00" or "total: 5.00" or "price: 5.00"
+    /(?:amount|total|price|sum|cost|paid|payment)[\s:]*\$?\s*(\d+(?:\.\d{1,2})?)/i,
+    // "5.00" near payment words (within 50 chars)
+    /(?:paid|payment|donation|tip|bought|support)[\s\S]{0,50}?(\d+\.\d{2})/i,
+    // Standalone decimal like "3.20" or "5.00" (common on receipts)
+    /\b(\d{1,4}\.\d{2})\b/,
+  ];
 
-  // Also try matching plain numbers near currency words
-  if (!amount) {
-    const nearCurrency = text.match(/(?:USD|usd|dollars?)\s*(\d+(?:\.\d{1,2})?)/i)
-      || text.match(/(\d+(?:\.\d{1,2})?)\s*(?:USD|usd|dollars?)/i);
-    if (nearCurrency) amount = parseFloat(nearCurrency[1]);
+  for (const pattern of amountPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const parsed = parseFloat(match[1]);
+      if (parsed > 0 && parsed < 10000) {
+        amount = parsed;
+        break;
+      }
+    }
   }
 
   return { isKofi, amount };

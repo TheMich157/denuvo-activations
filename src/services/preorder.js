@@ -134,11 +134,17 @@ export function getClaim(preorderId, userId) {
  */
 export function removeClaim(preorderId, userId) {
   try {
-    const result = db.prepare(
+    // Check if claim exists first
+    const existing = db.prepare(
+      'SELECT id FROM preorder_claims WHERE preorder_id = ? AND user_id = ?'
+    ).get(preorderId, userId);
+    if (!existing) return false;
+
+    db.prepare(
       'DELETE FROM preorder_claims WHERE preorder_id = ? AND user_id = ?'
     ).run(preorderId, userId);
     scheduleSave();
-    return result?.changes > 0;
+    return true;
   } catch {
     return false;
   }

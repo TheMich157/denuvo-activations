@@ -35,6 +35,21 @@ export function enterGiveaway(giveawayId, userId) {
   } catch { return false; }
 }
 
+export function leaveGiveaway(giveawayId, userId) {
+  try {
+    const existing = db.prepare('SELECT 1 FROM giveaway_entries WHERE giveaway_id = ? AND user_id = ?').get(giveawayId, userId);
+    if (!existing) return false;
+    db.prepare('DELETE FROM giveaway_entries WHERE giveaway_id = ? AND user_id = ?').run(giveawayId, userId);
+    scheduleSave();
+    return true;
+  } catch { return false; }
+}
+
+export function setGiveawayWinner(giveawayId, winnerId) {
+  db.prepare('UPDATE giveaways SET winners = ?, status = ? WHERE id = ?').run(JSON.stringify([winnerId]), 'ended', giveawayId);
+  scheduleSave();
+}
+
 export function getEntries(giveawayId) {
   return db.prepare('SELECT user_id FROM giveaway_entries WHERE giveaway_id = ?').all(giveawayId);
 }

@@ -35,7 +35,8 @@ import {
   logPreorderStatus,
   logFeedback,
 } from '../services/activationLog.js';
-import { getGiveaway, hasEntered, enterGiveaway, getEntryCount } from '../services/giveaway.js';
+import { getGiveaway, hasEntered, enterGiveaway, leaveGiveaway, getEntryCount } from '../services/giveaway.js';
+import { createTicketForGame } from '../services/ticket.js';
 import { submitFeedback, hasFeedback } from '../services/feedback.js';
 import { handleBulkCodeModal } from '../commands/bulkcode.js';
 import { handleModal as bulkdoneHandleModal } from '../commands/bulkdone.js';
@@ -671,13 +672,33 @@ async function handleGiveawayEnter(interaction) {
     await interaction.reply({ content: 'This giveaway has expired.', flags: MessageFlags.Ephemeral });
     return true;
   }
+
+  // Toggle: if already entered, leave; otherwise enter
   if (hasEntered(giveawayId, interaction.user.id)) {
-    await interaction.reply({ content: 'You\'ve already entered this giveaway!', flags: MessageFlags.Ephemeral });
+    leaveGiveaway(giveawayId, interaction.user.id);
+    const count = getEntryCount(giveawayId);
+    await interaction.reply({ content: `❌ You left the giveaway for **${giveaway.game_name}**. Press again to re-enter. (${count} entries)`, flags: MessageFlags.Ephemeral });
+
+    // Update entry count on message
+    if (giveaway.message_id && giveaway.channel_id) {
+      try {
+        const ch = await interaction.client.channels.fetch(giveaway.channel_id).catch(() => null);
+        if (ch) {
+          const msg = await ch.messages.fetch(giveaway.message_id).catch(() => null);
+          if (msg?.embeds?.[0]) {
+            const updated = EmbedBuilder.from(msg.embeds[0])
+              .setFooter({ text: `Giveaway #${giveawayId} • ${count} entries` });
+            await msg.edit({ embeds: [updated] }).catch(() => {});
+          }
+        }
+      } catch {}
+    }
     return true;
   }
+
   enterGiveaway(giveawayId, interaction.user.id);
   const count = getEntryCount(giveawayId);
-  await interaction.reply({ content: `🎉 You've entered the giveaway for **${giveaway.game_name}**! (${count} total entries)`, flags: MessageFlags.Ephemeral });
+  await interaction.reply({ content: `🎉 You've entered the giveaway for **${giveaway.game_name}**! Press again to leave. (${count} total entries)`, flags: MessageFlags.Ephemeral });
 
   // Update the giveaway message entry count
   if (giveaway.message_id && giveaway.channel_id) {
@@ -693,6 +714,88 @@ async function handleGiveawayEnter(interaction) {
       }
     } catch {}
   }
+  return true;
+}
+
+async function handleGiveawayClaim(interaction) {
+  if (!interaction.isButton() || !interaction.customId.startsWith('giveaway_claim:')) return false;
+
+  const giveawayId = parseInt(interaction.customId.split(':')[1], 10);
+  const giveaway = getGiveaway(giveawayId);
+  if (!giveaway) {
+    await interaction.reply({ content: 'Giveaway not found.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (giveaway.status !== 'ended') {
+    await interaction.reply({ content: 'This giveaway hasn\'t ended yet.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  // Only winners can claim
+  let winners = [];
+  try { winners = JSON.parse(giveaway.winners || '[]'); } catch {}
+  if (!winners.includes(interaction.user.id)) {
+    await interaction.reply({ content: '❌ Only giveaway winners can claim the prize.', flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  // Check if game has an app ID for ticket creation
+  if (!giveaway.game_app_id) {
+    await interaction.reply({
+      content: `🎉 You won **${giveaway.game_name}**! No App ID was set for this giveaway — please contact <@${giveaway.created_by}> directly for your activation.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  // Create a ticket with the giveaway creator as the assigned issuer
+  const result = await createTicketForGame(interaction, giveaway.game_app_id, { preorder: true });
+  if (!result.ok) {
+    await interaction.editReply({ content: `❌ Could not create ticket: ${result.error}` });
+    return true;
+  }
+
+  const ticketChannel = result.channel;
+  const embed = new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle('🎁 Giveaway Prize Claimed!')
+    .setDescription(
+      [
+        `<@${interaction.user.id}> won **${giveaway.game_name}** in Giveaway #${giveawayId}!`,
+        '',
+        `**Hosted by:** <@${giveaway.created_by}>`,
+        ticketChannel ? `**Ticket:** <#${ticketChannel.id}>` : '',
+      ].filter(Boolean).join('\n')
+    )
+    .setTimestamp();
+
+  await interaction.editReply({ embeds: [embed] });
+
+  // Notify the ticket channel
+  if (ticketChannel) {
+    try {
+      await ticketChannel.send({
+        content: `<@${giveaway.created_by}>`,
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x9b59b6)
+            .setTitle('🎁 Giveaway Winner Ticket')
+            .setDescription(
+              [
+                `<@${interaction.user.id}> won **${giveaway.game_name}** in Giveaway #${giveawayId}.`,
+                '',
+                `Please provide the activation code for this user.`,
+              ].join('\n')
+            )
+            .setTimestamp(),
+        ],
+        allowedMentions: { users: [giveaway.created_by] },
+      });
+    } catch {}
+  }
+
   return true;
 }
 
@@ -775,6 +878,7 @@ export async function handle(interaction) {
     handlePreorderClaim,
     handleTipVerifyButton,
     handleGiveawayEnter,
+    handleGiveawayClaim,
     handleFeedbackButton,
     handleBulkCodeModal,
     bulkdoneHandleModal,

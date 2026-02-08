@@ -7,8 +7,9 @@ import {
   EmbedBuilder,
   MessageFlags,
 } from 'discord.js';
-import { buildStockSelectMenus, getStockCount, getChunkLabel, getGlobalStockStats, getRestockStats } from '../services/stock.js';
+import { buildStockSelectMenus, getStockCount, getChunkLabel, getGlobalStockStats, getRestockStats, getPerGameRestockDetails } from '../services/stock.js';
 import { getGameDisplayName, getGameByAppId } from '../utils/games.js';
+import { db } from '../db/index.js';
 import { getAvailableActivatorCount, getTotalActivatorCount } from '../services/activatorStatus.js';
 import { getPanel, setPanel, clearPanel, deleteClosedMessage, cancelReopenTimer } from '../services/panel.js';
 import { isActivator } from '../utils/activator.js';
@@ -72,24 +73,30 @@ export function buildPanelMessagePayload() {
   );
   const stats = getGlobalStockStats();
   const restock = getRestockStats();
-  const regenParts = [];
-  if (restock.in1h > 0) regenParts.push(`**${restock.in1h}** in <1h`);
-  if (restock.in6h > 0) regenParts.push(`**${restock.in6h}** in <6h`);
-  if (restock.in24h > 0) regenParts.push(`**${restock.in24h}** in <24h`);
-  if (restock.total > restock.in24h) regenParts.push(`**${restock.total - restock.in24h}** in 24h+`);
+  const perGame = getPerGameRestockDetails(8);
+
   let regenText;
-  if (regenParts.length > 0) {
-    regenText = regenParts.join(' • ') + ` (${restock.total} total)`;
-    if (restock.nextAt) {
-      const nextMs = new Date(restock.nextAt + 'Z').getTime() - Date.now();
-      if (nextMs > 0) {
-        const mins = Math.ceil(nextMs / 60_000);
-        const timeStr = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
-        regenText += `\nNext token in **${timeStr}**`;
-      }
-    }
+  if (restock.total === 0) {
+    regenText = '✅ All stocked up — no pending regeneration';
   } else {
-    regenText = 'All stocked up — no pending regeneration';
+    const lines = [];
+    // Per-game breakdown
+    for (const g of perGame) {
+      const game = getGameByAppId(g.gameAppId);
+      const name = game ? getGameDisplayName(game) : `App ${g.gameAppId}`;
+      const ts = Math.floor(new Date(g.nextAt + 'Z').getTime() / 1000);
+      lines.push(`⏳ **${name}** — +${g.pending} slot${g.pending > 1 ? 's' : ''} <t:${ts}:R>`);
+    }
+    // If there are more games than shown
+    const totalGames = new Set(
+      db.prepare(`SELECT DISTINCT game_app_id FROM stock_restock_queue WHERE datetime(restock_at) > datetime('now')`).all().map(r => r.game_app_id)
+    ).size;
+    if (totalGames > perGame.length) {
+      lines.push(`… and **${totalGames - perGame.length}** more game${totalGames - perGame.length > 1 ? 's' : ''}`);
+    }
+    // Summary line
+    lines.push(`\n📊 **${restock.total}** total slots regenerating`);
+    regenText = lines.join('\n');
   }
 
   const embed = new EmbedBuilder()

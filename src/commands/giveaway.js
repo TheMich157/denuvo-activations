@@ -3,6 +3,16 @@ import { createGiveaway, setGiveawayMessage, getGiveaway, getActiveGiveaways, ge
 import { requireGuild } from '../utils/guild.js';
 import { db } from '../db/index.js';
 
+/** Build the Claim button row for a giveaway winner. */
+export function buildClaimRow(giveawayId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`giveaway_claim:${giveawayId}`)
+      .setLabel('🎁 Claim Prize')
+      .setStyle(ButtonStyle.Success),
+  );
+}
+
 export const data = new SlashCommandBuilder()
   .setName('giveaway')
   .setDescription('Manage giveaways')
@@ -54,9 +64,10 @@ export async function execute(interaction) {
           `🏆 **Winners:** ${maxWinners}`,
           `⏰ **Ends:** <t:${endsTimestamp}:R> (<t:${endsTimestamp}:F>)`,
           `👤 **Hosted by:** <@${interaction.user.id}>`,
+          appId ? `🏷️ **App ID:** [\`${appId}\`](https://store.steampowered.com/app/${appId})` : '',
           '',
-          'Click the button below to enter!',
-        ].join('\n')
+          'Click the button below to enter! Press again to leave.',
+        ].filter(Boolean).join('\n')
       )
       .setFooter({ text: `Giveaway #${giveawayId} • 0 entries` })
       .setTimestamp();
@@ -68,7 +79,14 @@ export async function execute(interaction) {
         .setStyle(ButtonStyle.Primary),
     );
 
-    const msg = await interaction.reply({ embeds: [embed], components: [row], fetchReply: true });
+    // Post the giveaway with @everyone ping
+    const msg = await interaction.reply({
+      content: '@everyone',
+      embeds: [embed],
+      components: [row],
+      allowedMentions: { parse: ['everyone'] },
+      fetchReply: true,
+    });
     setGiveawayMessage(giveawayId, msg.id, interaction.channelId);
     return;
   }
@@ -95,20 +113,56 @@ export async function execute(interaction) {
     if (!giveaway) return interaction.reply({ content: `Giveaway #${id} not found.`, flags: MessageFlags.Ephemeral });
     if (giveaway.status === 'ended') return interaction.reply({ content: `Giveaway #${id} already ended.`, flags: MessageFlags.Ephemeral });
 
+    const totalEntries = getEntryCount(id);
     const winners = pickWinners(id, giveaway.max_winners);
     endGiveaway(id, winners);
 
-    const winnerMentions = winners.length > 0 ? winners.map((w) => `<@${w}>`).join(', ') : 'No entries — no winners.';
+    if (winners.length === 0) {
+      const embed = new EmbedBuilder()
+        .setColor(0xed4245)
+        .setTitle(`🎉 Giveaway Ended: ${giveaway.game_name}`)
+        .setDescription('No entries — no winners.')
+        .setFooter({ text: `Giveaway #${id} • 0 entries` })
+        .setTimestamp();
+      await interaction.reply({ embeds: [embed] });
+
+      // Update original message
+      if (giveaway.channel_id && giveaway.message_id) {
+        try {
+          const channel = await interaction.client.channels.fetch(giveaway.channel_id).catch(() => null);
+          if (channel) {
+            const msg = await channel.messages.fetch(giveaway.message_id).catch(() => null);
+            if (msg) {
+              const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
+                .setColor(0xed4245)
+                .setTitle(`🎉 GIVEAWAY ENDED: ${giveaway.game_name}`)
+                .setDescription('No entries — no winners.')
+                .setFooter({ text: `Giveaway #${id} • 0 entries • Ended` });
+              await msg.edit({ embeds: [updatedEmbed], components: [] });
+            }
+          }
+        } catch {}
+      }
+      return;
+    }
+
+    const winnerMentions = winners.map((w) => `<@${w}>`).join(', ');
     const embed = new EmbedBuilder()
       .setColor(0x57f287)
       .setTitle(`🎉 Giveaway Ended: ${giveaway.game_name}`)
-      .setDescription(`**Winner${winners.length !== 1 ? 's' : ''}:** ${winnerMentions}`)
-      .setFooter({ text: `Giveaway #${id} • ${getEntryCount(id)} total entries` })
+      .setDescription(
+        [
+          `**Winner${winners.length !== 1 ? 's' : ''}:** ${winnerMentions}`,
+          '',
+          '🎁 Click **Claim Prize** on the giveaway post to open your activation ticket!',
+        ].join('\n')
+      )
+      .setFooter({ text: `Giveaway #${id} • ${totalEntries} total entries` })
       .setTimestamp();
 
-    await interaction.reply({ embeds: [embed] });
+    await interaction.reply({ content: winnerMentions, embeds: [embed], allowedMentions: { users: winners } });
 
-    // DM winners (respect notify_giveaway preference)
+    // DM winners
     for (const winnerId of winners) {
       try {
         const prefs = db.prepare('SELECT notify_giveaway FROM users WHERE id = ?').get(winnerId);
@@ -120,7 +174,10 @@ export async function execute(interaction) {
               new EmbedBuilder()
                 .setColor(0x57f287)
                 .setTitle('🎉 You Won a Giveaway!')
-                .setDescription(`Congratulations! You won the giveaway for **${giveaway.game_name}**! An activator will contact you soon.`)
+                .setDescription(
+                  `Congratulations! You won the giveaway for **${giveaway.game_name}**!\n\n` +
+                  '🎁 Go to the giveaway post and click **Claim Prize** to open your activation ticket.'
+                )
                 .setTimestamp(),
             ],
           }).catch(() => {});
@@ -128,7 +185,7 @@ export async function execute(interaction) {
       } catch {}
     }
 
-    // Update original message if possible
+    // Update original message — replace Enter button with Claim button
     if (giveaway.channel_id && giveaway.message_id) {
       try {
         const channel = await interaction.client.channels.fetch(giveaway.channel_id).catch(() => null);
@@ -138,9 +195,15 @@ export async function execute(interaction) {
             const updatedEmbed = EmbedBuilder.from(msg.embeds[0])
               .setColor(0x57f287)
               .setTitle(`🎉 GIVEAWAY ENDED: ${giveaway.game_name}`)
-              .setDescription(`**Winner${winners.length !== 1 ? 's' : ''}:** ${winnerMentions}`)
-              .setFooter({ text: `Giveaway #${id} • ${getEntryCount(id)} entries • Ended` });
-            await msg.edit({ embeds: [updatedEmbed], components: [] });
+              .setDescription(
+                [
+                  `**Winner${winners.length !== 1 ? 's' : ''}:** ${winnerMentions}`,
+                  '',
+                  '🎁 Winners: click **Claim Prize** below to open your activation ticket!',
+                ].join('\n')
+              )
+              .setFooter({ text: `Giveaway #${id} • ${totalEntries} entries • Ended` });
+            await msg.edit({ content: winnerMentions, embeds: [updatedEmbed], components: [buildClaimRow(id)], allowedMentions: { users: winners } });
           }
         }
       } catch {}

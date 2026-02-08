@@ -89,3 +89,26 @@ export function getRestockStats() {
     nextAt: nextRow?.t ?? null,
   };
 }
+
+/**
+ * Get per-game restock details: game name, pending count, and soonest restock time.
+ * Returns up to `limit` games sorted by soonest restock.
+ */
+export function getPerGameRestockDetails(limit = 10) {
+  const rows = db.prepare(`
+    SELECT
+      q.game_app_id,
+      COUNT(*) AS pending,
+      MIN(datetime(q.restock_at)) AS next_at
+    FROM stock_restock_queue q
+    WHERE datetime(q.restock_at) > datetime('now')
+    GROUP BY q.game_app_id
+    ORDER BY next_at ASC
+    LIMIT ?
+  `).all(limit);
+  return rows.map((r) => ({
+    gameAppId: r.game_app_id,
+    pending: r.pending,
+    nextAt: r.next_at,
+  }));
+}
