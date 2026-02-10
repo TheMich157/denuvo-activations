@@ -34,10 +34,18 @@ const commandFiles = readdirSync(join(__dirname, 'src/commands'))
 
 console.log('[DEBUG] Loading command files:', commandFiles);
 
+const loadedCommandNames = new Set();
 for (const file of commandFiles) {
   console.log(`[DEBUG] Loading command: ${file}`);
   const mod = await import(`./src/commands/${file}`);
   if (mod.data?.name) {
+    // Check for duplicate command names
+    if (loadedCommandNames.has(mod.data.name)) {
+      console.error(`[DEBUG] DUPLICATE COMMAND NAME DETECTED: ${mod.data.name} in file ${file}`);
+      console.error(`[DEBUG] This command was already loaded from another file. Skipping...`);
+      continue;
+    }
+    loadedCommandNames.add(mod.data.name);
     commands.set(mod.data.name, mod);
     console.log(`[DEBUG] Loaded command: ${mod.data.name}`);
   } else {
@@ -74,6 +82,21 @@ client.once(Events.ClientReady, async (c) => {
   console.log('[DEBUG] Registering commands:', body.map(cmd => cmd.name));
   
   try {
+    // First, clear existing commands to prevent duplicates
+    console.log('[DEBUG] Clearing existing commands...');
+    if (config.guildId) {
+      console.log(`[DEBUG] Clearing guild commands for guild: ${config.guildId}`);
+      await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), { body: [] });
+    } else {
+      console.log('[DEBUG] Clearing global commands');
+      await rest.put(Routes.applicationCommands(config.clientId), { body: [] });
+    }
+    console.log('[DEBUG] Existing commands cleared');
+    
+    // Small delay to ensure cleanup is processed
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Now register the new commands
     if (config.guildId) {
       console.log(`[DEBUG] Registering guild commands for guild: ${config.guildId}`);
       await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), { body });
