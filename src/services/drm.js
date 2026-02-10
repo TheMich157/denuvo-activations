@@ -1650,20 +1650,36 @@ export async function generateAuthCodeForRequest(gameAppId, confirmCode = null) 
  * @returns {Promise<string>} The authorization code
  */
 export async function generateAuthCodeWithFallback(gameAppId, confirmCode = null) {
+  debugger; // Debug: generateAuthCodeWithFallback start
+  console.log('[DEBUG] generateAuthCodeWithFallback called:', { gameAppId, confirmCode });
+  
   const appId = Number(gameAppId);
-  if (!Number.isInteger(appId) || appId < 1) throw new Error('Invalid game App ID.');
+  if (!Number.isInteger(appId) || appId < 1) {
+    console.log('[DEBUG] Invalid game App ID:', gameAppId);
+    throw new Error('Invalid game App ID.');
+  }
+  
+  console.log('[DEBUG] Parsed appId:', appId);
 
   // Check if Steam ticket generator is configured and enabled
   const configValidation = validateSteamTicketConfig();
+  console.log('[DEBUG] Steam ticket config validation:', configValidation);
+  
   if (steamTicketConfig.enabled && configValidation.valid) {
+    console.log('[DEBUG] Steam ticket generator is enabled and valid');
+    
     try {
       // Try Steam ticket generator first if it's set as primary
       if (steamTicketConfig.mode === 'primary') {
+        console.log('[DEBUG] Attempting Steam ticket generator (primary mode)');
         log('Attempting Steam ticket generator (primary mode)');
         const { generateAuthCodeFromTicket } = await import('./steamTicketGenerator.js');
-        return await generateAuthCodeFromTicket(appId);
+        const result = await generateAuthCodeFromTicket(appId);
+        console.log('[DEBUG] Steam ticket generator succeeded');
+        return result;
       }
     } catch (error) {
+      console.log('[DEBUG] Steam ticket generator failed:', error.message);
       log(`Steam ticket generator failed: ${error.message}`);
       
       // Don't fall back if Steam API initialization failed and fallback is disabled
@@ -1689,10 +1705,14 @@ export async function generateAuthCodeWithFallback(gameAppId, confirmCode = null
   }
 
   // Try original DRM method
+  console.log('[DEBUG] Using original DRM method');
   try {
     log('Using original DRM method');
-    return await generateAuthCodeForRequest(gameAppId, confirmCode);
+    const result = await generateAuthCodeForRequest(gameAppId, confirmCode);
+    console.log('[DEBUG] DRM method succeeded');
+    return result;
   } catch (drmError) {
+    console.log('[DEBUG] DRM method failed:', drmError.message);
     log(`DRM method failed: ${drmError.message}`);
     
     // If DRM failed due to authentication issues, try browser automation
@@ -1700,6 +1720,7 @@ export async function generateAuthCodeWithFallback(gameAppId, confirmCode = null
         drmError.message.includes('Steam cookies were not accepted') ||
         drmError.message.includes('Could not authenticate with drm.steam.run')) {
       
+      console.log('[DEBUG] Attempting browser automation fallback');
       log('Attempting browser automation fallback');
       
       try {
@@ -1708,20 +1729,27 @@ export async function generateAuthCodeWithFallback(gameAppId, confirmCode = null
         const activators = getActivatorsForGame(appId, true);
         const automated = activators.filter(a => a.method === 'automated' && a.steam_username);
         
+        console.log('[DEBUG] Found automated accounts for browser automation:', automated.length);
+        
         if (automated.length > 0) {
           const credentials = getCredsFromDb(automated[0].id, appId);
           if (credentials) {
+            console.log('[DEBUG] Using browser automation pool with credentials');
             log('Using browser automation pool with credentials');
-            return await generateDrmCodeWithBrowserPool(appId, credentials, confirmCode);
+            const result = await generateDrmCodeWithBrowserPool(appId, credentials, confirmCode);
+            console.log('[DEBUG] Browser automation succeeded');
+            return result;
           }
         }
       } catch (browserError) {
+        console.log('[DEBUG] Browser automation fallback failed:', browserError.message);
         log(`Browser automation fallback failed: ${browserError.message}`);
         // Continue to throw the original DRM error
       }
     }
     
     // If we get here, both DRM and browser automation failed
+    console.log('[DEBUG] All methods failed, throwing original DRM error');
     throw drmError;
   }
 }

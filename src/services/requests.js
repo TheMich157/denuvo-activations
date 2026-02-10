@@ -45,31 +45,71 @@ export function markScreenshotVerified(requestId) {
 }
 
 export function createRequest(buyerId, gameAppId, gameName) {
-  if (!isValidDiscordId(buyerId)) throw new Error('Invalid buyer ID');
-  if (!isValidAppId(gameAppId)) throw new Error('Invalid game ID');
+  debugger; // Debug: createRequest start
+  console.log('[DEBUG] Creating request:', { buyerId, gameAppId, gameName });
+  
+  if (!isValidDiscordId(buyerId)) {
+    console.log('[DEBUG] Invalid buyer ID:', buyerId);
+    throw new Error('Invalid buyer ID');
+  }
+  if (!isValidAppId(gameAppId)) {
+    console.log('[DEBUG] Invalid game ID:', gameAppId);
+    throw new Error('Invalid game ID');
+  }
+  
   const id = crypto.randomUUID();
+  console.log('[DEBUG] Generated request ID:', id);
+  
   db.prepare(`
     INSERT INTO requests (id, buyer_id, game_app_id, game_name, status) VALUES (?, ?, ?, ?, 'pending')
   `).run(id, buyerId, gameAppId, gameName);
   scheduleSave();
+  
+  console.log('[DEBUG] Request created successfully:', id);
   return id;
 }
 
 export function getRequest(requestId) {
-  if (!isValidRequestId(requestId)) return null;
-  return db.prepare('SELECT * FROM requests WHERE id = ?').get(requestId);
+  console.log('[DEBUG] Getting request:', requestId);
+  
+  if (!isValidRequestId(requestId)) {
+    console.log('[DEBUG] Invalid request ID:', requestId);
+    return null;
+  }
+  
+  const request = db.prepare('SELECT * FROM requests WHERE id = ?').get(requestId);
+  console.log('[DEBUG] Retrieved request:', request?.id, request?.status);
+  
+  return request;
 }
 
 export function assignIssuer(requestId, issuerId) {
+  debugger; // Debug: assignIssuer start
+  console.log('[DEBUG] Assigning issuer:', { requestId, issuerId });
+  
   if (!isValidRequestId(requestId) || !isValidDiscordId(issuerId)) {
+    console.log('[DEBUG] Invalid request or user ID');
     return { ok: false, error: 'Invalid request or user' };
   }
+  
   const req = getRequest(requestId);
-  if (!req || req.status !== 'pending') return { ok: false, error: 'Invalid or already claimed request' };
+  console.log('[DEBUG] Retrieved request for assignment:', req?.id, req?.status);
+  
+  if (!req || req.status !== 'pending') {
+    console.log('[DEBUG] Request not pending or not found');
+    return { ok: false, error: 'Invalid or already claimed request' };
+  }
 
   const activators = getActivatorsForGame(req.game_app_id);
+  console.log('[DEBUG] Available activators for game:', activators.length);
+  
   const canClaim = activators.some((a) => a.activator_id === issuerId);
-  if (!canClaim) return { ok: false, error: 'You do not have this game registered or daily limit reached' };
+  console.log('[DEBUG] Can claim:', canClaim, 'for issuer:', issuerId);
+  
+  if (!canClaim) {
+    console.log('[DEBUG] Cannot claim - not registered or limit reached');
+    return { ok: false, error: 'You do not have this game registered or daily limit reached' };
+  }
 
   const succeeded = db.transaction(() => {
     const current = db.prepare('SELECT status FROM requests WHERE id = ?').get(requestId);
@@ -79,25 +119,57 @@ export function assignIssuer(requestId, issuerId) {
     `).run(issuerId, requestId);
     return true;
   });
-  if (succeeded !== true) return { ok: false, error: 'Request was already claimed' };
+  
+  console.log('[DEBUG] Assignment transaction result:', succeeded);
+  
+  if (succeeded !== true) {
+    console.log('[DEBUG] Request was already claimed');
+    return { ok: false, error: 'Request was already claimed' };
+  }
+  
   scheduleSave();
+  console.log('[DEBUG] Issuer assigned successfully');
   return { ok: true };
 }
 
 export function completeRequest(requestId, authCode) {
+  debugger; // Debug: completeRequest start
+  console.log('[DEBUG] Completing request:', { requestId, authCode });
+  
   const req = getRequest(requestId);
-  if (!req || req.status !== 'in_progress') return false;
-  if (!req.screenshot_verified) return 'screenshot_not_verified';
+  console.log('[DEBUG] Retrieved request for completion:', req?.id, req?.status);
+  
+  if (!req || req.status !== 'in_progress') {
+    console.log('[DEBUG] Request not in progress or not found');
+    return false;
+  }
+  
+  if (!req.screenshot_verified) {
+    console.log('[DEBUG] Screenshot not verified');
+    return 'screenshot_not_verified';
+  }
+  
   const code = typeof authCode === 'string' ? authCode.trim() : String(authCode ?? '').trim();
-  if (!code) return false;
+  console.log('[DEBUG] Auth code processed:', code ? 'PRESENT' : 'MISSING');
+  
+  if (!code) {
+    console.log('[DEBUG] No auth code provided');
+    return false;
+  }
+  
   db.prepare(`
     UPDATE requests SET status = 'completed', auth_code = ?, completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?
   `).run(code, requestId);
+  
   const steamId = getCredentials(req.issuer_id, req.game_app_id)?.username ?? `manual_${req.issuer_id}_${req.game_app_id}`;
+  console.log('[DEBUG] Steam ID for stats:', steamId);
+  
   incrementDailyActivation(steamId);
   decrementActivatorStock(req.issuer_id, req.game_app_id);
   setCooldown(req.buyer_id, req.game_app_id);
   scheduleSave();
+  
+  console.log('[DEBUG] Request completed successfully');
   return true;
 }
 

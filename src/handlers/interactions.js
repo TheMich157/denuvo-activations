@@ -77,14 +77,26 @@ function buildIssuerActionRow(requestId, hasAutomated = false) {
 }
 
 async function handleClaimRequest(interaction) {
+  debugger; // Debug: handleClaimRequest start
+  console.log('[DEBUG] handleClaimRequest called', { 
+    customId: interaction.customId, 
+    userId: interaction.user.id,
+    isButton: interaction.isButton()
+  });
+  
   if (!interaction.isButton() || !interaction.customId.startsWith('claim_request:')) return false;
   const requestId = interaction.customId.split(':')[1];
+  console.log('[DEBUG] Extracted requestId:', requestId);
+  
   const result = assignIssuer(requestId, interaction.user.id);
+  console.log('[DEBUG] assignIssuer result:', result);
   if (!result.ok) {
+    console.log('[DEBUG] assignIssuer failed:', result.error);
     await interaction.reply({ content: result.error, flags: MessageFlags.Ephemeral });
     return true;
   }
   const req = getRequest(requestId);
+  console.log('[DEBUG] Retrieved request:', req?.id, req?.game_name);
   const channel = interaction.channel;
   if (channel?.guild && req.ticket_channel_id === channel.id) {
     await channel.permissionOverwrites.set([
@@ -131,23 +143,41 @@ async function handleClaimRequest(interaction) {
 }
 
 async function handleAutoCodeButton(interaction) {
+  debugger; // Debug: handleAutoCodeButton start
+  console.log('[DEBUG] handleAutoCodeButton called', { 
+    customId: interaction.customId, 
+    userId: interaction.user.id,
+    isButton: interaction.isButton()
+  });
+  
   if (!interaction.isButton() || !interaction.customId.startsWith('auto_code:')) return false;
   const requestId = interaction.customId.slice('auto_code:'.length);
+  console.log('[DEBUG] Auto code requestId:', requestId);
+  
   const req = getRequest(requestId);
+  console.log('[DEBUG] Retrieved request for auto code:', req?.id, req?.game_name, 'issuer:', req?.issuer_id);
   if (!req || req.issuer_id !== interaction.user.id) {
+    console.log('[DEBUG] Auto code authorization check failed:', { 
+      reqExists: !!req, 
+      reqIssuerId: req?.issuer_id, 
+      userId: interaction.user.id 
+    });
     await interaction.reply({ content: 'Invalid or unauthorized.', flags: MessageFlags.Ephemeral });
     return true;
-}
+  }
 
   // Check if automation is already running
   const existingStatus = getTicketAutomationStatus(requestId);
+  console.log('[DEBUG] Existing automation status:', existingStatus);
+  
   if (existingStatus && existingStatus.active) {
+    console.log('[DEBUG] Automation already running, returning early');
     await interaction.reply({ 
       content: '🔄 Automation is already running for this ticket. Please wait for it to complete.', 
       flags: MessageFlags.Ephemeral 
-  });
+    });
     return true;
-}
+  }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -207,6 +237,8 @@ async function handleAutoCodeButton(interaction) {
   };
 
   try {
+    console.log('[DEBUG] Starting enhanced automation process');
+    
     // Step 1: Check browser pool and automation capabilities
     await updateProgress(
       'Checking Enhanced Automation',
@@ -218,6 +250,7 @@ async function handleAutoCodeButton(interaction) {
         ''
       ].join('\n')
     );
+    console.log('[DEBUG] Step 1 completed - browser pool check');
 
     // Step 2: Start enhanced code generation
     await updateProgress(
@@ -233,6 +266,7 @@ async function handleAutoCodeButton(interaction) {
     );
 
     const code = await generateAuthCodeWithFallback(req.game_app_id);
+    console.log('[DEBUG] Generated auth code:', code ? 'SUCCESS' : 'FAILED');
 
     // Success message
     await updateProgress(
@@ -307,7 +341,10 @@ async function handleAutoCodeButton(interaction) {
     });
 
   } catch (err) {
+    debugger; // Debug: Error in handleAutoCodeButton
+    console.log('[DEBUG] Error in auto code generation:', err);
     const msg = err?.message || 'Enhanced generation failed.';
+    console.log('[DEBUG] Error message:', msg);
     
     // Handle screenshot verification case
     if (msg.includes('SCREENSHOT_NOT_VERIFIED')) {
@@ -472,14 +509,30 @@ async function handleAutoCodeButton(interaction) {
 }
 
 async function handleAutoCode2FAButton(interaction) {
+  debugger; // Debug: handleAutoCode2FAButton start
+  console.log('[DEBUG] handleAutoCode2FAButton called', { 
+    customId: interaction.customId, 
+    userId: interaction.user.id,
+    isButton: interaction.isButton()
+  });
+  
   if (!interaction.isButton() || !interaction.customId.startsWith('auto_code_2fa:')) return false;
   const requestId = interaction.customId.slice('auto_code_2fa:'.length);
+  console.log('[DEBUG] Auto code 2FA requestId:', requestId);
+  
   const req = getRequest(requestId);
+  console.log('[DEBUG] Retrieved request for auto code 2FA:', req?.id, req?.game_name);
   if (!req || req.issuer_id !== interaction.user.id) {
+    console.log('[DEBUG] Auto code 2FA authorization check failed:', { 
+      reqExists: !!req, 
+      reqIssuerId: req?.issuer_id, 
+      userId: interaction.user.id 
+    });
     await interaction.reply({ content: 'Invalid or unauthorized.', flags: MessageFlags.Ephemeral });
     return true;
   }
   const credentials = getCredentials(req.issuer_id, req.game_app_id);
+  console.log('[DEBUG] Credentials found:', !!credentials);
   if (!credentials) {
     await interaction.reply({ content: 'Automated credentials not available. Use **Done** and enter the code manually.', flags: MessageFlags.Ephemeral });
     return true;
@@ -499,26 +552,45 @@ async function handleAutoCode2FAButton(interaction) {
         .setMaxLength(8)
     )
   );
+  console.log('[DEBUG] Showing 2FA modal');
   await interaction.showModal(modal);
   return true;
 }
 
 async function handleAutoCodeModal(interaction) {
+  debugger; // Debug: handleAutoCodeModal start
+  console.log('[DEBUG] handleAutoCodeModal called', { 
+    customId: interaction.customId, 
+    userId: interaction.user.id,
+    isModalSubmit: interaction.isModalSubmit()
+  });
+  
   if (!interaction.isModalSubmit() || !interaction.customId.startsWith('auto_code_modal:')) return false;
   const requestId = interaction.customId.slice('auto_code_modal:'.length);
   const twoFactorCode = interaction.fields.getTextInputValue('twofactor').trim();
+  console.log('[DEBUG] Auto code modal requestId:', requestId, '2FA code length:', twoFactorCode.length);
+  
   const req = getRequest(requestId);
+  console.log('[DEBUG] Retrieved request for auto code modal:', req?.id, req?.game_name);
   if (!req || req.issuer_id !== interaction.user.id) {
+    console.log('[DEBUG] Auto code modal authorization check failed:', { 
+      reqExists: !!req, 
+      reqIssuerId: req?.issuer_id, 
+      userId: interaction.user.id 
+    });
     await interaction.reply({ content: 'Invalid or unauthorized.', flags: MessageFlags.Ephemeral });
     return true;
   }
   if (req.status !== 'in_progress') {
+    console.log('[DEBUG] Request not in progress, status:', req.status);
     await interaction.reply({ content: 'This request is no longer in progress.', flags: MessageFlags.Ephemeral });
     return true;
   }
   const credentials = getCredentials(req.issuer_id, req.game_app_id);
+  console.log('[DEBUG] Credentials for modal:', !!credentials);
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  console.log('[DEBUG] Deferred reply for auto code modal');
 
   const ticketChannel = req.ticket_channel_id
     ? await interaction.client.channels.fetch(req.ticket_channel_id).catch(() => null)
@@ -530,10 +602,15 @@ async function handleAutoCodeModal(interaction) {
   }
 
   try {
+    console.log('[DEBUG] Starting code generation with 2FA');
     const code = credentials
       ? await generateAuthCodeWithFallback(req.game_app_id, twoFactorCode)
       : await generateAuthCodeWithFallback(req.game_app_id, twoFactorCode);
+    console.log('[DEBUG] Code generation result:', code ? 'SUCCESS' : 'FAILED');
+    
     const result = await completeAndNotifyTicket(req, code, interaction.client);
+    console.log('[DEBUG] Ticket completion result:', result);
+    
     if (result === 'screenshot_not_verified') {
       await interaction.editReply({
         content: '❌ **Cannot complete** — the buyer\'s screenshot has not been verified yet. Verify it first, then try again.',
@@ -544,6 +621,7 @@ async function handleAutoCodeModal(interaction) {
       content: `✅ **Code generated and sent to the ticket.**`,
     });
   } catch (err) {
+    console.log('[DEBUG] Error in auto code modal:', err);
     const msg = err?.message || 'Generation failed.';
     if (err instanceof DrmError) {
       console.error('[DRM Auto-Code 2FA]', err.toDiagnostic());
@@ -556,15 +634,29 @@ async function handleAutoCodeModal(interaction) {
 }
 
 async function handleManualVerifyScreenshot(interaction) {
+  debugger; // Debug: handleManualVerifyScreenshot start
+  console.log('[DEBUG] handleManualVerifyScreenshot called', { 
+    customId: interaction.customId, 
+    userId: interaction.user.id,
+    channelId: interaction.channelId,
+    isButton: interaction.isButton()
+  });
+  
   if (!interaction.isButton() || !interaction.customId.startsWith('manual_verify_screenshot:')) return false;
   const req = getRequestByChannel(interaction.channelId);
+  console.log('[DEBUG] Retrieved request by channel:', req?.id, req?.game_name);
+  
   if (!req) {
+    console.log('[DEBUG] No ticket found for channel:', interaction.channelId);
     await interaction.reply({ content: 'No ticket found for this channel.', flags: MessageFlags.Ephemeral });
     return true;
   }
   const isIssuer = req.issuer_id && interaction.user.id === req.issuer_id;
   const activator = isActivator(interaction.member);
+  console.log('[DEBUG] Authorization check:', { isIssuer, activator, userId: interaction.user.id });
+  
   if (!isIssuer && !activator) {
+    console.log('[DEBUG] User not authorized for manual verification');
     await interaction.reply({
       content: 'Only the assigned activator or an activator can approve manually.',
       flags: MessageFlags.Ephemeral,
@@ -578,6 +670,8 @@ async function handleManualVerifyScreenshot(interaction) {
     failCount: 0,
     manualVerified: true,
   });
+  console.log('[DEBUG] Screenshot manually verified');
+  
   const ticketRef = `#${req.id.slice(0, 8).toUpperCase()}`;
   const approvedEmbed = new EmbedBuilder()
     .setColor(0x57f287)
@@ -597,15 +691,29 @@ async function handleManualVerifyScreenshot(interaction) {
 }
 
 async function handleCloseTicket(interaction) {
+  debugger; // Debug: handleCloseTicket start
+  console.log('[DEBUG] handleCloseTicket called', { 
+    customId: interaction.customId, 
+    userId: interaction.user.id,
+    channelId: interaction.channelId,
+    isButton: interaction.isButton()
+  });
+  
   if (!interaction.isButton() || interaction.customId !== 'close_ticket') return false;
   const req = getRequestByChannel(interaction.channelId);
+  console.log('[DEBUG] Retrieved request for close ticket:', req?.id, req?.game_name);
+  
   if (!req) {
+    console.log('[DEBUG] No ticket found for close ticket');
     await interaction.reply({ content: 'No ticket found for this channel.', flags: MessageFlags.Ephemeral });
     return true;
   }
   const isBuyer = interaction.user.id === req.buyer_id;
   const isIssuer = req.issuer_id && interaction.user.id === req.issuer_id;
+  console.log('[DEBUG] Close ticket authorization:', { isBuyer, isIssuer, userId: interaction.user.id });
+  
   if (!isBuyer && !isIssuer) {
+    console.log('[DEBUG] User not authorized to close ticket');
     await interaction.reply({ content: 'Only the buyer or assigned activator can close this ticket.', flags: MessageFlags.Ephemeral });
     return true;
   }
@@ -613,6 +721,8 @@ async function handleCloseTicket(interaction) {
   await saveTranscript(interaction.client, interaction.channelId, req.id, 'cancelled').catch(() => {});
   cancelRequest(req.id);
   clearState(interaction.channelId);
+  console.log('[DEBUG] Ticket cancelled and state cleared');
+  
   // DM buyer about cancellation
   if (interaction.user.id !== req.buyer_id) {
     sendStatusDM(interaction.client, req.buyer_id, 'cancelled', { gameName: req.game_name }).catch(() => {});
@@ -890,33 +1000,51 @@ async function handlePreorderClaim(interaction) {
 }
 
 async function handleGiveawayEnter(interaction) {
+  debugger; // Debug: handleGiveawayEnter start
+  console.log('[DEBUG] handleGiveawayEnter called', { 
+    customId: interaction.customId, 
+    userId: interaction.user.id,
+    isButton: interaction.isButton()
+  });
+  
   if (!interaction.isButton() || !interaction.customId.startsWith('giveaway_enter:')) return false;
 
   // Blacklist guard
   if (isBlacklisted(interaction.user.id)) {
+    console.log('[DEBUG] User is blacklisted:', interaction.user.id);
     await interaction.reply({ content: 'You are blacklisted and cannot enter giveaways.', flags: MessageFlags.Ephemeral });
     return true;
   }
 
   const giveawayId = parseInt(interaction.customId.split(':')[1], 10);
+  console.log('[DEBUG] Giveaway ID:', giveawayId);
+  
   const giveaway = getGiveaway(giveawayId);
+  console.log('[DEBUG] Giveaway found:', !!giveaway, giveaway?.status);
+  
   if (!giveaway) {
     await interaction.reply({ content: 'Giveaway not found.', flags: MessageFlags.Ephemeral });
     return true;
   }
   if (giveaway.status === 'ended') {
+    console.log('[DEBUG] Giveaway already ended');
     await interaction.reply({ content: 'This giveaway has already ended.', flags: MessageFlags.Ephemeral });
     return true;
   }
   if (new Date(giveaway.ends_at) < new Date()) {
+    console.log('[DEBUG] Giveaway expired');
     await interaction.reply({ content: 'This giveaway has expired.', flags: MessageFlags.Ephemeral });
     return true;
   }
 
   // Toggle: if already entered, leave; otherwise enter
-  if (hasEntered(giveawayId, interaction.user.id)) {
+  const alreadyEntered = hasEntered(giveawayId, interaction.user.id);
+  console.log('[DEBUG] User already entered:', alreadyEntered);
+  
+  if (alreadyEntered) {
     leaveGiveaway(giveawayId, interaction.user.id);
     const count = getEntryCount(giveawayId);
+    console.log('[DEBUG] User left giveaway, new count:', count);
     await interaction.reply({ content: `❌ You left the giveaway for **${giveaway.game_name}**. Press again to re-enter. (${count} entries)`, flags: MessageFlags.Ephemeral });
 
     // Update entry count on message
@@ -938,6 +1066,7 @@ async function handleGiveawayEnter(interaction) {
 
   enterGiveaway(giveawayId, interaction.user.id);
   const count = getEntryCount(giveawayId);
+  console.log('[DEBUG] User entered giveaway, new count:', count);
   await interaction.reply({ content: `🎉 You've entered the giveaway for **${giveaway.game_name}**! Press again to leave. (${count} total entries)`, flags: MessageFlags.Ephemeral });
 
   // Update the giveaway message entry count
@@ -1041,18 +1170,28 @@ async function handleGiveawayClaim(interaction) {
 }
 
 async function handleFeedbackButton(interaction) {
+  debugger; // Debug: handleFeedbackButton start
+  console.log('[DEBUG] handleFeedbackButton called', { 
+    customId: interaction.customId, 
+    userId: interaction.user.id,
+    isButton: interaction.isButton()
+  });
+  
   if (!interaction.isButton() || !interaction.customId.startsWith('feedback:')) return false;
 
   const parts = interaction.customId.split(':');
   const requestId = parts[1];
   const rating = parseInt(parts[2], 10);
+  console.log('[DEBUG] Feedback data:', { requestId, rating });
 
   if (hasFeedback(requestId)) {
+    console.log('[DEBUG] Feedback already submitted for request:', requestId);
     await interaction.reply({ content: 'You already submitted feedback for this ticket. Thanks!', flags: MessageFlags.Ephemeral });
     return true;
   }
 
   submitFeedback(requestId, interaction.user.id, rating);
+  console.log('[DEBUG] Feedback submitted');
 
   const stars = '⭐'.repeat(rating) + '☆'.repeat(5 - rating);
 
@@ -1071,6 +1210,7 @@ async function handleFeedbackButton(interaction) {
 
   // Log feedback to the log channel
   const req = getRequest(requestId);
+  console.log('[DEBUG] Logging feedback for request:', requestId);
   logFeedback({
     requestId,
     userId: interaction.user.id,
@@ -1081,6 +1221,7 @@ async function handleFeedbackButton(interaction) {
 
   // Also post to review channel if configured
   if (config.reviewChannelId && req) {
+    console.log('[DEBUG] Posting to review channel:', config.reviewChannelId);
     try {
       const reviewChannel = await interaction.client.channels.fetch(config.reviewChannelId).catch(() => null);
       if (reviewChannel) {
@@ -1140,9 +1281,67 @@ interactionHandlers = [
 }
 
 export async function handleInteractions(interaction) {
+  debugger; // Debug: handleInteractions start
+  console.log('[DEBUG] handleInteractions called', { 
+    type: interaction.constructor.name, 
+    customId: interaction.customId, 
+    commandName: interaction.commandName,
+    userId: interaction.user.id,
+    channelId: interaction.channelId,
+    guildId: interaction.guildId
+  });
+  
   log(interaction.constructor.name, interaction.customId ?? interaction.commandName ?? '—');
-  for (const h of interactionHandlers) {
-    const handled = await h(interaction);
-    if (handled) return;
+  try {
+    console.log('[DEBUG] Starting handler loop, total handlers:', interactionHandlers.length);
+    for (const h of interactionHandlers) {
+      try {
+        console.log('[DEBUG] Trying handler:', h.name || 'anonymous');
+        const handled = await h(interaction);
+        console.log('[DEBUG] Handler result:', { handler: h.name, handled });
+        if (handled) {
+          console.log('[DEBUG] Interaction handled by:', h.name);
+          return;
+        }
+      } catch (err) {
+        console.error('[Interaction] Handler error:', err?.message || err);
+        console.log('[DEBUG] Error in handler:', h.name, err);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: 'Something went wrong. Please try again or use **Refresh Stock** and select your game again.',
+            flags: MessageFlags.Ephemeral,
+          }).catch(() => {});
+        } else if (interaction.deferred && !interaction.replied) {
+          await interaction.editReply({
+            content: 'Something went wrong. Please try again or use **Refresh Stock** and select your game again.',
+          }).catch(() => {});
+        }
+        return;
+      }
+    }
+    // No handler matched — log for debugging and respond
+    console.log('[DEBUG] No handler matched for interaction:', {
+      type: interaction.type,
+      customId: interaction.customId,
+      isStringSelectMenu: interaction.isStringSelectMenu?.()
+    });
+    log('No handler matched:', interaction.type, interaction.customId ?? '(no customId)', interaction.isStringSelectMenu?.() ?? false);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: 'This button or menu is no longer active. Try **Refresh Stock** first, then select your game again. If it still fails, an activator can post a fresh panel with `/ticketpanel`.',
+        flags: MessageFlags.Ephemeral,
+      }).catch(() => {});
+    }
+  } catch (err) {
+    console.error('[Interaction] Unexpected error:', err?.message || err);
+    console.log('[DEBUG] Unexpected error in handleInteractions:', err);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: 'Something went wrong. Please try again.',
+        flags: MessageFlags.Ephemeral,
+      }).catch(() => {});
+    } else if (interaction.deferred && !interaction.replied) {
+      await interaction.editReply({ content: 'Something went wrong. Please try again.' }).catch(() => {});
+    }
   }
 }

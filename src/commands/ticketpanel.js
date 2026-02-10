@@ -22,8 +22,14 @@ export const data = new SlashCommandBuilder()
   .setContexts(0);
 
 export function buildPanelComponents() {
+  debugger; // Debug: buildPanelComponents start
+  console.log('[DEBUG] Building panel components...');
+  
   const chunks = buildStockSelectMenus();
+  console.log('[DEBUG] Built stock chunks:', chunks.length);
+  
   if (chunks.length === 0) {
+    console.log('[DEBUG] No chunks available, returning empty panel');
     return [
       new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -36,7 +42,11 @@ export function buildPanelComponents() {
   }
 
   const LOW = 10;
+  console.log('[DEBUG] Building panel rows from chunks...');
+  
   const rows = chunks.map((chunk, i) => {
+    console.log(`[DEBUG] Processing chunk ${i} with ${chunk.length} games`);
+    
     const options = chunk.map((g) => {
       const stock = getStockCount(g.appId);
       const gameWithDemand = getGameByAppId(g.appId) || g;
@@ -45,6 +55,9 @@ export function buildPanelComponents() {
       const displayName = getGameDisplayName(g);
       const maxLabelLen = 95;
       const label = displayName.length > maxLabelLen ? displayName.slice(0, maxLabelLen - 3) + '...' : displayName;
+      
+      console.log(`[DEBUG] Game option: ${label} (stock: ${stock}, emoji: ${emoji})`);
+      
       return {
         label,
         value: String(g.appId),

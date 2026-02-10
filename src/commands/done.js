@@ -30,25 +30,54 @@ const VALIDITY_MINUTES = 30;
  * @returns {Promise<boolean>} - true if completed and sent
  */
 export async function completeAndNotifyTicket(req, authCode, client) {
+  debugger; // Debug: completeAndNotifyTicket start
+  console.log('[DEBUG] completeAndNotifyTicket called:', { 
+    requestId: req?.id, 
+    authCode: authCode ? 'PRESENT' : 'MISSING',
+    hasClient: !!client
+  });
+  
   const completed = completeRequest(req.id, authCode);
-  if (completed === 'screenshot_not_verified') return 'screenshot_not_verified';
-  if (!completed) return false;
+  console.log('[DEBUG] completeRequest result:', completed);
+  
+  if (completed === 'screenshot_not_verified') {
+    console.log('[DEBUG] Screenshot not verified, returning');
+    return 'screenshot_not_verified';
+  }
+  
+  if (!completed) {
+    console.log('[DEBUG] Request completion failed');
+    return false;
+  }
+  
   const updated = getRequest(req.id);
-  if (updated) await logActivation(updated);
+  console.log('[DEBUG] Retrieved updated request:', updated?.id, updated?.status);
+  
+  if (updated) {
+    console.log('[DEBUG] Logging activation...');
+    await logActivation(updated);
+  }
 
   const hours = getCooldownHours(req.game_app_id);
   const cooldownUntil = Date.now() + hours * 60 * 60 * 1000;
   const game = getGameByAppId(req.game_app_id);
   const gameName = game ? getGameDisplayName(game) : req.game_name;
+  
+  console.log('[DEBUG] Cooldown info:', { hours, gameName });
+  
   if (client) {
+    console.log('[DEBUG] Sending cooldown DM...');
     sendCooldownDM(client, req.buyer_id, { gameName, cooldownUntil, hours }).catch(() => {});
   }
 
   // Streak tracking only - points system removed
   if (req.issuer_id) {
+    console.log('[DEBUG] Recording streak activity for issuer:', req.issuer_id);
     recordStreakActivity(req.issuer_id);
     // Streak bonus points removed
   }
+  
+  console.log('[DEBUG] Building completion embed...');
 
   // Save transcript on completion
   if (req.ticket_channel_id) {

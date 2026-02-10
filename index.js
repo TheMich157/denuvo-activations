@@ -23,16 +23,29 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const { handleInteractions } = await import(new URL('./src/handlers/interactions.js', import.meta.url).href);
 
 validateConfig();
+console.log('[DEBUG] Config validated');
+
 await initDb();
+console.log('[DEBUG] Database initialized');
 
 const commands = new Map();
 const commandFiles = readdirSync(join(__dirname, 'src/commands'))
   .filter((f) => f.endsWith('.js') && f !== 'panelHandler.js' && f !== 'call_mod.js');
 
+console.log('[DEBUG] Loading command files:', commandFiles);
+
 for (const file of commandFiles) {
+  console.log(`[DEBUG] Loading command: ${file}`);
   const mod = await import(`./src/commands/${file}`);
-  if (mod.data?.name) commands.set(mod.data.name, mod);
+  if (mod.data?.name) {
+    commands.set(mod.data.name, mod);
+    console.log(`[DEBUG] Loaded command: ${mod.data.name}`);
+  } else {
+    console.log(`[DEBUG] Skipped file (no command data): ${file}`);
+  }
 }
+
+console.log('[DEBUG] Total commands loaded:', commands.size);
 
 const client = new Client({
   intents: [
@@ -52,19 +65,28 @@ const client = new Client({
 });
 
 client.once(Events.ClientReady, async (c) => {
-  console.log(`Logged in as ${c.user.tag}`);
+  debugger; // Debug: ClientReady start
+  console.log(`[DEBUG] Client ready: ${c.user.tag}`);
+  console.log(`[DEBUG] Guild count: ${c.guilds.cache.size}`);
+  
   const rest = new REST().setToken(config.token);
   const body = [...commands.values()].map((m) => m.data.toJSON());
+  console.log('[DEBUG] Registering commands:', body.map(cmd => cmd.name));
+  
   try {
     if (config.guildId) {
+      console.log(`[DEBUG] Registering guild commands for guild: ${config.guildId}`);
       await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), { body });
     } else {
+      console.log('[DEBUG] Registering global commands');
       await rest.put(Routes.applicationCommands(config.clientId), { body });
     }
-    console.log(`Registered ${body.length} slash commands`);
+    console.log(`[DEBUG] Successfully registered ${body.length} slash commands`);
   } catch (err) {
-    console.error('Failed to register commands:', err);
+    console.error('[DEBUG] Failed to register commands:', err);
   }
+  
+  console.log('[DEBUG] Starting services...');
   startTicketAutoClose(client);
   setActivationLogClient(client);
   startStockRestock(client);
@@ -73,24 +95,54 @@ client.once(Events.ClientReady, async (c) => {
   startLeaderboardScheduler(client);
   startGiveawayScheduler(client);
   setPanelClient(client, buildPanelMessagePayload);
+  
+  console.log('[DEBUG] Syncing panel message...');
   syncPanelMessage(client, buildPanelMessagePayload()).catch((err) =>
     console.error('[Panel] Startup sync failed:', err?.message)
   );
+  
+  console.log('[DEBUG] ClientReady completed');
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  debugger; // Debug: InteractionCreate
+  console.log('[DEBUG] Interaction created:', {
+    type: interaction.type,
+    isAutocomplete: interaction.isAutocomplete(),
+    isChatInputCommand: interaction.isChatInputCommand(),
+    isButton: interaction.isButton(),
+    isModalSubmit: interaction.isModalSubmit(),
+    isStringSelectMenu: interaction.isStringSelectMenu(),
+    commandName: interaction.commandName,
+    customId: interaction.customId,
+    userId: interaction.user.id
+  });
+  
   if (interaction.isAutocomplete()) {
+    console.log('[DEBUG] Processing autocomplete for command:', interaction.commandName);
     const cmd = commands.get(interaction.commandName);
-    if (cmd?.autocomplete) return cmd.autocomplete(interaction);
+    if (cmd?.autocomplete) {
+      console.log('[DEBUG] Found autocomplete handler');
+      return cmd.autocomplete(interaction);
+    } else {
+      console.log('[DEBUG] No autocomplete handler found for:', interaction.commandName);
+    }
   }
+  
   if (interaction.isChatInputCommand()) {
+    console.log('[DEBUG] Processing chat input command:', interaction.commandName);
     const cmd = commands.get(interaction.commandName);
-    if (!cmd?.execute) return;
+    if (!cmd?.execute) {
+      console.log('[DEBUG] No execute handler found for command:', interaction.commandName);
+      return;
+    }
+    
     // Allow everyone to use /skiptoken balance and /skiptoken buy, even though the main command is whitelisted
     if (
       interaction.commandName === 'skiptoken' &&
       ['balance', 'buy'].includes(interaction.options?.getSubcommand(false))
     ) {
+      console.log('[DEBUG] Processing whitelisted skiptoken subcommand');
       try {
         return await cmd.execute(interaction);
       } catch (err) {
@@ -108,9 +160,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       interaction.commandName,
       interaction.member
     );
+    console.log('[DEBUG] Command permission check:', { command: interaction.commandName, allowed, reason });
+    
     if (!allowed) {
+      console.log('[DEBUG] Command not allowed for user:', interaction.user.id);
       return interaction.reply({ content: reason || 'Command not allowed.', flags: MessageFlags.Ephemeral });
     }
+    
+    console.log('[DEBUG] Executing command:', interaction.commandName);
     try {
       return await cmd.execute(interaction);
     } catch (err) {
@@ -122,13 +179,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
   }
+  
+  console.log('[DEBUG] Handling interaction with handleInteractions');
   return handleInteractions(interaction);
 });
 
 client.on(Events.MessageCreate, handleMessage);
 
 client.on(Events.GuildMemberAdd, async (member) => {
-  if (member.user?.bot) return;
+  debugger; // Debug: GuildMemberAdd
+  console.log('[DEBUG] Member joined:', { 
+    userId: member.id, 
+    username: member.user?.tag, 
+    isBot: member.user?.bot,
+    guildId: member.guild.id 
+  });
+  
+  if (member.user?.bot) {
+    console.log('[DEBUG] Skipping bot member');
+    return;
+  }
+  
   const { EmbedBuilder } = await import('discord.js');
 
   // Welcome message: prefer dedicated welcome channel, fallback to verify channel
@@ -188,7 +259,19 @@ client.on(Events.GuildMemberAdd, async (member) => {
 });
 
 client.on(Events.GuildMemberRemove, async (member) => {
-  if (member.user?.bot) return;
+  debugger; // Debug: GuildMemberRemove
+  console.log('[DEBUG] Member left:', { 
+    userId: member.id, 
+    username: member.user?.tag, 
+    isBot: member.user?.bot,
+    guildId: member.guild.id 
+  });
+  
+  if (member.user?.bot) {
+    console.log('[DEBUG] Skipping bot member');
+    return;
+  }
+  
   const { EmbedBuilder } = await import('discord.js');
 
   const welcomeChId = config.welcomeChannelId || config.verifyChannelId;
@@ -247,6 +330,8 @@ process.on('SIGINT', () => { gracefulShutdown('SIGINT'); });
 process.on('SIGTERM', () => { gracefulShutdown('SIGTERM'); });
 
 client.login(config.token).catch((err) => {
-  console.error('Login failed:', err);
+  console.error('[DEBUG] Login failed:', err);
   process.exit(1);
 });
+
+console.log('[DEBUG] Starting bot login...');

@@ -6,10 +6,13 @@ import { isValidAppId } from '../utils/validate.js';
 import { checkRateLimit, getRemainingCooldown } from '../utils/rateLimit.js';
 
 export async function handleSelect(interaction) {
-  if (!interaction.isStringSelectMenu() || !interaction.customId.startsWith('ticket_panel:')) return false;
+  if (!interaction.isStringSelectMenu() || !(interaction.customId ?? '').startsWith('ticket_panel:')) return false;
 
-  const value = interaction.values[0];
-  if (value === '0') return true;
+  const value = interaction.values?.[0];
+  if (!value || value === '0') {
+    await interaction.reply({ content: 'No game selected. Please choose a game from the menu.', flags: MessageFlags.Ephemeral }).catch(() => {});
+    return true;
+  }
 
   const appId = parseInt(value, 10);
   if (!isValidAppId(appId)) {
